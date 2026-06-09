@@ -907,7 +907,17 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
 
           {/* ACTIVE VIEW WRAPPERS RENDERS */}
           <div id="view-canvas-wrapper" className="min-h-[460px]">
-            {renderViewContent()}
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeView}
+                initial={{ opacity: 0, y: 7 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -7 }}
+                transition={{ duration: 0.2, ease: "easeInOut" }}
+              >
+                {renderViewContent()}
+              </motion.div>
+            </AnimatePresence>
           </div>
 
           {/* ----------------------------------------------------
