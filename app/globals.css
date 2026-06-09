@@ -1,0 +1,101 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Config custom variables directly for premium UI elements */
+@layer base {
+  :root {
+    --font-heading: var(--font-display), "Montserrat", sans-serif;
+    --font-body: var(--font-sans), "Inter", sans-serif;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #080808;
+}
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 9px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #ffd700;
+}
+
+/* Premium Cinematic Utilities */
+.font-display {
+  font-family: var(--font-heading);
+}
+
+.font-sans {
+  font-family: var(--font-body);
+}
+
+/* Glassmorphism Blur 25px with Gold edge highlight */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-panel:hover {
+  border-color: rgba(255, 215, 0, 0.3);
+  box-shadow: 0 0 20px rgba(255, 215, 0, 0.1);
+}
+
+.glass-panel-heavy {
+  background: rgba(8, 8, 8, 0.85);
+  backdrop-filter: blur(32px);
+  border: 1px solid rgba(255, 215, 0, 0.15);
+  transition: all 0.3s ease;
+}
+
+/* Electric Gold Glow Hover */
+.gold-glow-hover {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.gold-glow-hover:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 215, 0, 0.4);
+  box-shadow: 0 0 30px rgba(255, 215, 0, 0.15);
+}
+
+.gold-glow-btn {
+  box-shadow: 0 0 15px rgba(255, 215, 0, 0.1);
+  transition: all 0.2s ease-in-out;
+}
+.gold-glow-btn:hover {
+  box-shadow: 0 0 25px rgba(255, 215, 0, 0.3);
+}
+
+/* Custom Skeleton Screen shimmering */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer-skeleton {
+  background: linear-gradient(90deg, #18181b 25%, #27272a 37%, #18181b 63%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite linear;
+}
+
+/* Interactive Ripple Gold Accent */
+.gold-ripple {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Smooth Momentum Scroll support */
+.smooth-scroll {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}

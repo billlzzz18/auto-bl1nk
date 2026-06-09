@@ -1,0 +1,121 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User register database.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "bio": { "type": "string" },
+        "avatar": { "type": "string" },
+        "google_connected": { "type": "boolean" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["id", "email"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "Personal organizational projects.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "user_id": { "type": "string" },
+        "is_favorite": { "type": "boolean" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["id", "name", "user_id"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "To-do lists, notes, events, habits.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "project_id": { "type": "string" },
+        "user_id": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string" },
+        "due_date": { "type": "string" },
+        "priority": { "type": "string" },
+        "type": { "type": "string" },
+        "tags": { "type": "array" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "required": ["id", "title", "project_id", "user_id"]
+    },
+    "Folder": {
+      "title": "Folder",
+      "description": "Organizing lists.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "parent_id": { "type": "string" },
+        "user_id": { "type": "string" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["id", "name", "user_id"]
+    },
+    "Tag": {
+      "title": "Tag",
+      "description": "Tag categorization.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "color": { "type": "string" },
+        "user_id": { "type": "string" }
+      },
+      "required": ["id", "name", "user_id"]
+    },
+    "Automation": {
+      "title": "Automation",
+      "description": "Workflows.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "project_id": { "type": "string" },
+        "trigger_event": { "type": "string" },
+        "condition_field": { "type": "string" },
+        "condition_value": { "type": "string" },
+        "action_type": { "type": "string" },
+        "action_value": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "user_id": { "type": "string" }
+      },
+      "required": ["id", "project_id", "action_type", "user_id"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User settings database."
+    },
+    "/projects/{projectId}": {
+      "schema": "Project",
+      "description": "Managing projects."
+    },
+    "/tasks/{taskId}": {
+      "schema": "Task",
+      "description": "User specific tasks."
+    },
+    "/folders/{folderId}": {
+      "schema": "Folder",
+      "description": "User folders."
+    },
+    "/tags/{tagId}": {
+      "schema": "Tag",
+      "description": "Tags."
+    },
+    "/automations/{automationId}": {
+      "schema": "Automation",
+      "description": "Automations."
+    }
+  }
+}

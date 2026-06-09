@@ -1,0 +1,6 @@
+{
+  "name": "bl1nk ink",
+  "description": "The Intelligent Personal Operating System - A cinematic, elegant, and high-performance workspace for tasks, notes, databases, and automated workflows.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
