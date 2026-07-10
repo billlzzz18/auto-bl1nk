@@ -44,6 +44,8 @@ interface WorkspaceShellProps {
   onRefreshStates?: () => void;
 }
 
+const generateToastId = () => Date.now().toString();
+
 /**
  * JSDoc: Workspace Navigation Shell (แผงครอบจักรวาลระบบ bl1nk ink)
  * รวมตัวควบคุม Sidebar, Responsive Drawer, Command Palette, Toast Alert, และ Status Bar
@@ -77,6 +79,70 @@ export default function WorkspaceShell({ children, onRefreshStates }: WorkspaceS
     fold_personal: true
   });
 
+  // Onboarding Tour State
+  const [tourActive, setTourActive] = useState(false);
+  const [tourStep, setTourStep] = useState(0);
+
+  useEffect(() => {
+    if (data.user && typeof window !== 'undefined') {
+      const completed = window.localStorage.getItem('blink_onboarding_completed');
+      if (!completed) {
+        const timer = setTimeout(() => {
+          setTourActive(true);
+          setTourStep(1);
+        }, 100);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [data.user]);
+
+  // สร้างและลบ Folder แบบ Dynamic
+  const [showNewFolderForm, setShowNewFolderForm] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [newFolderParentId, setNewFolderParentId] = useState<string | null>(null);
+
+  const handleCreateFolderSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newFolderName.trim()) return;
+    try {
+      const res = await fetch('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newFolderName, parent_id: newFolderParentId })
+      });
+      if (res.ok) {
+        setNewFolderName('');
+        setShowNewFolderForm(false);
+        fetchSidebarData();
+        showToast('สร้างโฟลเดอร์เสร็จสิ้น!', 'success');
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || 'สร้างโฟลเดอร์ไม่สำเร็จ', 'alert');
+      }
+    } catch (err: any) {
+      showToast(err.message, 'alert');
+    }
+  };
+
+  const handleDeleteFolder = async (folderId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm('คุณแน่ใจหรือไม่ว่าต้องการลบโฟลเดอร์นี้? (โปรเจกต์ภายในจะไม่ได้ถูกลบไปด้วย)')) return;
+    try {
+      const res = await fetch(`/api/folders/${folderId}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        fetchSidebarData();
+        showToast('ลบโฟลเดอร์สำเร็จแล้ว!', 'success');
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || 'ลบโฟลเดอร์ไม่สำเร็จ', 'alert');
+      }
+    } catch (err: any) {
+      showToast(err.message, 'alert');
+    }
+  };
+
   // Modal สเตตสำหรับ Quick Task/Project
   const [quickTaskModal, setQuickTaskModal] = useState(false);
   const [quickTaskTitle, setQuickTaskTitle] = useState('');
@@ -85,7 +151,7 @@ export default function WorkspaceShell({ children, onRefreshStates }: WorkspaceS
 
   // ยูทิลิตีระบบ Toast คลาส (ย้ายมาเริ่มต้นด้านบนสุดเพื่อเลี่ยง TS Block Scope Reference)
   const showToast = (message: string, type: 'success' | 'alert' | 'info' = 'success') => {
-    const id = Date.now().toString();
+    const id = generateToastId();
     setToasts((prev) => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -384,7 +450,7 @@ export default function WorkspaceShell({ children, onRefreshStates }: WorkspaceS
           <img
             src={data.user?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
             alt="av"
-            className="w-8 h-8 rounded-full border border-[#FFD700]/30 object-cover"
+            className="w-10 h-10 rounded-full border border-[#FFD700]/30 object-cover shrink-0 aspect-square max-w-none"
             referrerPolicy="no-referrer"
           />
           <div className="flex-1 min-w-0">
@@ -445,36 +511,166 @@ export default function WorkspaceShell({ children, onRefreshStates }: WorkspaceS
 
           {/* Section: Modular Folders Nested Tree */}
           <div className="space-y-1">
-            <p className="px-3 text-[10px] uppercase font-display tracking-widest text-zinc-500 flex items-center gap-1.5 mb-1.5">
-              <FolderOpen className="w-3 h-3" />
-              <span>Folders Hierarchy</span>
-            </p>
+            <div className="px-3 flex items-center justify-between mb-1.5">
+              <span className="text-[10px] uppercase font-display tracking-widest text-[#FFD700] flex items-center gap-1.5">
+                <FolderOpen className="w-3 h-3 text-[#FFD700]" />
+                <span>Folders Hierarchy</span>
+              </span>
+              <button 
+                onClick={() => {
+                  setNewFolderParentId(null);
+                  setShowNewFolderForm(!showNewFolderForm);
+                }}
+                className="text-zinc-500 hover:text-[#FFD700] duration-250 cursor-pointer"
+                title="Create root folder"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {showNewFolderForm && (
+              <form onSubmit={handleCreateFolderSubmit} className="mx-2 mb-3 p-2 bg-white/5 border border-white/10 rounded-lg space-y-2">
+                <p className="text-[9px] uppercase tracking-wider text-[#FFD700]/80 font-display">
+                  {newFolderParentId ? 'New Subfolder' : 'New Root Folder'}
+                </p>
+                <input
+                  type="text"
+                  placeholder="Folder name..."
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  className="w-full bg-black/50 border border-zinc-800 rounded px-1.5 py-1 text-[11px] text-white focus:outline-none focus:border-[#FFD700]"
+                  required
+                />
+                <div className="flex items-center gap-1.5 justify-end">
+                  <button 
+                    type="button" 
+                    onClick={() => { setShowNewFolderForm(false); setNewFolderName(''); }}
+                    className="text-[9px] uppercase px-1.5 py-1 text-zinc-500 hover:text-zinc-350 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    className="text-[9px] uppercase px-2 py-1 bg-[#FFD700] text-black font-semibold rounded cursor-pointer duration-200 hover:bg-yellow-400"
+                  >
+                    Create
+                  </button>
+                </div>
+              </form>
+            )}
+
             <div className="space-y-1 px-1">
               {data.folders.filter((f) => !f.parent_id).map((f) => {
                 const subFolders = data.folders.filter((sub) => sub.parent_id === f.id);
                 const isExpanded = foldersExpanded[f.id];
+                const folderProjects = data.projects.filter((p: any) => p.folder_id === f.id);
 
                 return (
-                  <div key={f.id} className="space-y-0.5">
+                  <div key={f.id} className="space-y-0.5 group/folder">
                     <div
                       onClick={() => toggleFolder(f.id)}
-                      className="px-2 py-1.5 rounded-lg text-xs flex items-center gap-1 cursor-pointer text-zinc-400 hover:bg-[#FFD700]/5 duration-200"
+                      className={`px-2 py-1.5 rounded-lg text-xs flex items-center justify-between cursor-pointer duration-200 ${
+                        isExpanded ? 'text-zinc-200 bg-white/5' : 'text-zinc-400 hover:bg-[#FFD700]/5'
+                      }`}
                     >
-                      {subFolders.length > 0 ? (
-                        isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />
-                      ) : <span className="w-3.5" />}
-                      <span className="truncate">{f.name}</span>
+                      <div className="flex items-center gap-1.5 truncate">
+                        {subFolders.length > 0 || folderProjects.length > 0 ? (
+                          isExpanded ? <ChevronDown className="w-3.5 h-3.5 text-[#FFD700]/80" /> : <ChevronRight className="w-3.5 h-3.5 text-zinc-605" />
+                        ) : <span className="w-3.5" />}
+                        <span className="truncate font-medium">{f.name}</span>
+                      </div>
+                      <div className="flex items-center gap-1 opacity-0 group-hover/folder:opacity-100 duration-150 shrink-0">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setNewFolderParentId(f.id);
+                            setShowNewFolderForm(true);
+                          }}
+                          className="hover:text-[#FFD700] text-zinc-600 transition-colors p-0.5"
+                          title="Add subfolder"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={(e) => handleDeleteFolder(f.id, e)}
+                          className="hover:text-red-400 text-zinc-600 transition-colors p-0.5"
+                          title="Delete folder"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
 
-                    {isExpanded && subFolders.map((sub) => (
-                      <div
-                        key={sub.id}
-                        className="pl-6 pr-2 py-1.5 rounded-lg text-xs flex items-center gap-1.5 text-zinc-500 hover:text-zinc-300 hover:bg-white/5 cursor-pointer"
-                      >
-                        <span className="w-1.5 h-1.5 rounded-full bg-zinc-700" />
-                        <span className="truncate">{sub.name}</span>
+                    {isExpanded && (
+                      <div className="space-y-0.5">
+                        {/* Recursive-like Subfolders */}
+                        {subFolders.map((sub) => {
+                          const subExpanded = foldersExpanded[sub.id];
+                          const subProjects = data.projects.filter((p: any) => p.folder_id === sub.id);
+
+                          return (
+                            <div key={sub.id} className="space-y-0.5 pl-3 group/subfolder">
+                              <div
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleFolder(sub.id);
+                                }}
+                                className={`pl-3 pr-2 py-1.5 rounded-lg text-[11px] flex items-center justify-between cursor-pointer ${
+                                  subExpanded ? 'text-zinc-300' : 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5'
+                                }`}
+                              >
+                                <div className="flex items-center gap-1.5 truncate">
+                                  {subProjects.length > 0 ? (
+                                    subExpanded ? <ChevronDown className="w-3 h-3 text-[#FFD700]/70" /> : <ChevronRight className="w-3 h-3 text-zinc-650" />
+                                  ) : <span className="w-3" />}
+                                  <span className="truncate">{sub.name}</span>
+                                </div>
+                                <div className="flex items-center gap-1 opacity-0 group-hover/subfolder:opacity-100 duration-150 shrink-0">
+                                  <button
+                                    onClick={(e) => handleDeleteFolder(sub.id, e)}
+                                    className="hover:text-red-400 text-zinc-600 transition-colors p-0.5"
+                                    title="Delete subfolder"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              {subExpanded && subProjects.map((p) => (
+                                <div
+                                  key={p.id}
+                                  onClick={() => router.push(`/project/${p.id}`)}
+                                  className={`pl-8 pr-2 py-1.5 rounded-lg text-[11px] flex items-center gap-1.5 cursor-pointer transition-all duration-200 ${
+                                    currentPath === `/project/${p.id}` 
+                                      ? 'text-[#FFD700] bg-[#FFD700]/5 border-r-2 border-[#FFD700] font-semibold' 
+                                      : 'text-zinc-650 hover:text-zinc-350 hover:bg-white/5'
+                                  }`}
+                                >
+                                  <BookOpen className="w-3 h-3 text-zinc-650 shrink-0" />
+                                  <span className="truncate">{p.name}</span>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })}
+
+                        {/* Projects directly under this parent folder */}
+                        {folderProjects.map((p) => (
+                          <div
+                            key={p.id}
+                            onClick={() => router.push(`/project/${p.id}`)}
+                            className={`pl-6 pr-2 py-1.5 rounded-lg text-[11px] flex items-center gap-1.5 cursor-pointer transition-all duration-200 ${
+                              currentPath === `/project/${p.id}` 
+                                ? 'text-[#FFD700] bg-[#FFD700]/5 border-r-2 border-[#FFD700] font-semibold' 
+                                : 'text-zinc-550 hover:text-zinc-350 hover:bg-white/5'
+                            }`}
+                          >
+                            <BookOpen className="w-3 h-3 text-zinc-650 shrink-0" />
+                            <span className="truncate">{p.name}</span>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
                   </div>
                 );
               })}
@@ -715,7 +911,7 @@ export default function WorkspaceShell({ children, onRefreshStates }: WorkspaceS
                 onClick={() => setUserDropdownOpen(!userDropdownOpen)}
                 src={data.user?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
                 alt="user"
-                className="w-8 h-8 rounded-full border border-yellow-500/20 object-cover cursor-pointer hover:border-yellow-500 transition-all duration-300"
+                className="w-8 h-8 rounded-full border border-yellow-500/20 object-cover cursor-pointer hover:border-yellow-500 transition-all duration-300 shrink-0 aspect-square max-w-none"
               />
 
               <AnimatePresence>
@@ -999,6 +1195,179 @@ export default function WorkspaceShell({ children, onRefreshStates }: WorkspaceS
           <span className="text-[9px] font-display">Config</span>
         </div>
       </nav>
+
+      {/* ONBOARDING TOUR MODAL OVERLAY */}
+      <AnimatePresence>
+        {tourActive && (
+          <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 font-sans">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="w-full max-w-lg bg-zinc-950 border border-yellow-500/30 p-8 rounded-3xl shadow-2xl relative overflow-hidden"
+            >
+              {/* Top ambient lights */}
+              <div className="absolute top-0 left-1/4 right-1/4 h-[2px] bg-gradient-to-r from-transparent via-yellow-500/50 to-transparent" />
+              <div className="absolute -top-24 left-1/2 -translate-x-1/2 w-64 h-64 bg-yellow-500/10 rounded-full blur-3xl pointer-events-none" />
+
+              {/* Progress dots & Skip button */}
+              <div className="flex items-center justify-between mb-8">
+                <div className="flex gap-2">
+                  {[1, 2, 3].map((step) => (
+                    <div
+                      key={step}
+                      className={`h-1.5 rounded-full transition-all duration-300 ${
+                        tourStep === step ? 'w-8 bg-yellow-500' : 'w-2 bg-zinc-800'
+                      }`}
+                    />
+                  ))}
+                </div>
+                <button
+                  onClick={() => {
+                    if (typeof window !== 'undefined') {
+                      window.localStorage.setItem('blink_onboarding_completed', 'true');
+                    }
+                    setTourActive(false);
+                    showToast('ข้ามการแนะนำระบบเรียบร้อยแล้ว ยินดีต้อนรับสู่ bl1nk ink!', 'info');
+                  }}
+                  className="text-[10px] uppercase font-display tracking-widest text-zinc-500 hover:text-white duration-150 cursor-pointer"
+                >
+                  Skip Tour
+                </button>
+              </div>
+
+              {/* Step Content */}
+              <AnimatePresence mode="wait">
+                {tourStep === 1 && (
+                  <motion.div
+                    key="step1"
+                    initial={{ x: 20, opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    exit={{ x: -20, opacity: 0 }}
+                    className="space-y-4"
+                  >
+                    <div className="inline-flex p-3 rounded-2xl bg-yellow-500/10 border border-yellow-500/20 text-yellow-500">
+                      <Sparkles className="w-6 h-6 animate-pulse" />
+                    </div>
+                    <h3 className="text-lg font-display font-black tracking-tight text-white uppercase">
+                      1. Premium Cinematic Experience
+                    </h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed font-sans">
+                      ยินดีต้อนรับสู่ <span className="text-yellow-400 font-bold">bl1nk ink</span> สเปซทำงานระดับ Ultra-Premium 
+                      ที่ออกแบบโดยสถาปัตยกรรมสีเข้มเงียบสงบ (Cinematic Dark Aesthetic) 
+                      และลดการใช้ปุ่มที่รกรุงรัง เพื่อช่วยให้สมองของคุณจดจ่ออยู่กับสิ่งสำคัญอย่างสูงสุด
+                    </p>
+                    <div className="p-3 bg-zinc-900/40 border border-zinc-900 rounded-xl space-y-1.5">
+                      <p className="text-[10px] font-mono text-zinc-500 uppercase">💡 เคล็ดลับความฟินระดับสายตา:</p>
+                      <p className="text-[11px] text-zinc-400 leading-relaxed font-sans">
+                        คุณสามารถพับหรือกาง Sidebar หลักได้ตลอดเวลาผ่านปุ่มขอบจอเพื่อสร้างพื้นที่จดจ่อแบบกว้างขวางไร้รอยต่อ
+                      </p>
+                    </div>
+                  </motion.div>
+                )}
+
+                {tourStep === 2 && (
+                  <motion.div
+                    key="step2"
+                    initial={{ x: 20, opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    exit={{ x: -20, opacity: 0 }}
+                    className="space-y-4"
+                  >
+                    <div className="inline-flex p-3 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
+                      <Grid className="w-6 h-6" />
+                    </div>
+                    <h3 className="text-lg font-display font-black tracking-tight text-white uppercase">
+                      2. Interactive 5-View Data System
+                    </h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed font-sans">
+                      บริหารงานและบันทึกความจำได้ยืดหยุ่นถึง <span className="text-cyan-400 font-bold">5 มิติมุมมองระบบข้อมูล (5-View System)</span>:
+                    </p>
+                    <div className="grid grid-cols-5 gap-2 text-center">
+                      <div className="p-2 bg-zinc-900/60 rounded-xl border border-zinc-800 text-[9px] font-bold text-zinc-300">LIST</div>
+                      <div className="p-2 bg-zinc-900/60 rounded-xl border border-zinc-800 text-[9px] font-bold text-zinc-300">BOARD</div>
+                      <div className="p-2 bg-zinc-900/60 rounded-xl border border-zinc-800 text-[9px] font-bold text-zinc-300">TIMELINE</div>
+                      <div className="p-2 bg-zinc-900/60 rounded-xl border border-zinc-800 text-[9px] font-bold text-zinc-300">CALENDAR</div>
+                      <div className="p-2 bg-zinc-900/60 rounded-xl border border-zinc-800 text-[9px] font-bold text-zinc-300">HABIT</div>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 leading-relaxed font-sans">
+                      สลับมิติมุมมองเหล่านี้ได้ตลอดเวลาที่ด้านบนของบอร์ดโปรเจกต์ เพื่อเรียงร้อยเป้าหมายในสายตาที่คุณปรารถนา
+                    </p>
+                  </motion.div>
+                )}
+
+                {tourStep === 3 && (
+                  <motion.div
+                    key="step3"
+                    initial={{ x: 20, opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    exit={{ x: -20, opacity: 0 }}
+                    className="space-y-4"
+                  >
+                    <div className="inline-flex p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                      <Terminal className="w-6 h-6" />
+                    </div>
+                    <h3 className="text-lg font-display font-black tracking-tight text-white uppercase">
+                      3. Command Palette Control Center
+                    </h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed font-sans">
+                      ควบคุมทุกส่วนของระบบได้อย่างรวดเร็วโดยไม่ต้องปล่อยมือจากคีย์บอร์ด ผ่าน <span className="text-amber-400 font-bold">Command Palette (แผงครอบจักรวาล)</span>
+                    </p>
+                    <div className="p-3 bg-zinc-900/80 border border-zinc-800 rounded-xl text-center">
+                      <span className="font-mono text-xs bg-zinc-950 px-2.5 py-1.5 rounded-lg border border-zinc-800 text-amber-400 font-bold">
+                        Cmd + K
+                      </span>
+                      <span className="text-zinc-500 mx-2 text-xs">หรือ</span>
+                      <span className="font-mono text-xs bg-zinc-950 px-2.5 py-1.5 rounded-lg border border-zinc-800 text-amber-400 font-bold">
+                        Ctrl + K
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 leading-relaxed text-center font-sans">
+                      หรือกดพิมพ์คีย์ <kbd className="bg-zinc-900 px-1 py-0.5 rounded border border-zinc-800 text-[10px] font-mono text-zinc-300">/</kbd> บนจอเพื่อเปิดแผงคำสั่ง ค้นหาโปรเจกต์ สร้างภารกิจ หรือตั้งค่าระบบได้ทันที
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Navigation Actions */}
+              <div className="flex items-center justify-between border-t border-zinc-900 pt-6 mt-8">
+                <button
+                  type="button"
+                  disabled={tourStep === 1}
+                  onClick={() => setTourStep((prev) => Math.max(1, prev - 1))}
+                  className="px-4 py-2 rounded-xl text-[10px] uppercase font-display font-bold tracking-wider border border-zinc-900 text-zinc-500 hover:text-white hover:border-zinc-800 disabled:opacity-20 duration-150 cursor-pointer"
+                >
+                  Back
+                </button>
+
+                {tourStep < 3 ? (
+                  <button
+                    type="button"
+                    onClick={() => setTourStep((prev) => prev + 1)}
+                    className="px-5 py-2 rounded-xl text-[10px] uppercase font-display font-bold tracking-widest bg-yellow-500 hover:bg-yellow-400 text-zinc-950 shadow-lg gold-glow duration-150 cursor-pointer"
+                  >
+                    Next Step
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (typeof window !== 'undefined') {
+                        window.localStorage.setItem('blink_onboarding_completed', 'true');
+                      }
+                      setTourActive(false);
+                      showToast('เสร็จสิ้นการทัวร์ระบบ ยินดีต้อนรับอย่างเป็นทางการ!', 'success');
+                    }}
+                    className="px-6 py-2 rounded-xl text-[10px] uppercase font-display font-black tracking-widest bg-gradient-to-r from-yellow-500 to-amber-500 hover:from-yellow-400 hover:to-amber-400 text-zinc-950 shadow-lg gold-glow-btn duration-150 cursor-pointer animate-pulse"
+                  >
+                    Enter Space
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

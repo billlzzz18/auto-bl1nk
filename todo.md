@@ -66,4 +66,9 @@
   - [x] ลด Text พร่ำเพรื่อใน Dashboard (Telemetry) ทำให้แอปดูสบายตามากขึ้น <!-- id: 47_3 -->
   - [x] บูรณาการและตั้งค่า Sidebar Drawer ให้รองรับเมนูนำทางไปยังระบบ Canvas ควบคู่ได้อย่างสมบูรณ์ <!-- id: 47 -->
 
+- [ ] **Phase 12: Advanced Kanban Board Features** <!-- id: 48 -->
+  - [ ] เพิ่ม Filter Chips เหนือ Kanban grid บรรทัด `#kanban-grid-board` (กรองตาม Priority หรือ Due Date) <!-- id: 49 -->
+  - [ ] เพิ่มระบบสลับ Swimlanes (By Priority, By Task Type) แผงแนวนอนที่สวยงามและใช้งานมีประสิทธิภาพ <!-- id: 50 -->
+  - [ ] แทรกอนิเมชัน Framer Motion เลื่อนย้ายแบบ Smooth FLIP Animation ระหว่างคอลัมน์คัมบังและการ์ด <!-- id: 51 -->
+
 

@@ -88,6 +88,8 @@ function SettingsCenterContent() {
   const [newProjectDesc, setNewProjectDesc] = useState('');
   const [createProjectMsg, setCreateProjectMsg] = useState('');
   const [creatingProject, setCreatingProject] = useState(false);
+  const [folders, setFolders] = useState<any[]>([]);
+  const [newProjectFolderId, setNewProjectFolderId] = useState('');
 
   // 8. VERCEL & UPSTASH STATEFUL WORKFLOW PLAYGROUND STATE
   const [wfStatus, setWfStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
@@ -157,7 +159,8 @@ function SettingsCenterContent() {
         body: JSON.stringify({
           name: newProjectName,
           description: newProjectDesc,
-          google_access_token: googleAccessToken
+          google_access_token: googleAccessToken,
+          folder_id: newProjectFolderId || null
         })
       });
 
@@ -177,6 +180,7 @@ function SettingsCenterContent() {
 
         setNewProjectName('');
         setNewProjectDesc('');
+        setNewProjectFolderId('');
         loadSettingsData();
       } else {
         setCreateProjectMsg('เกิดข้อผิดพลาด: ' + (data.error || 'กรุณาลองใหม่อีกครั้ง'));
@@ -201,27 +205,30 @@ function SettingsCenterContent() {
       setProfileName(meData.user.name);
       setProfileBio(meData.user.bio || 'Architecting complex digital workflows.');
 
-      // โหลด API key, Webhooks, Extensions, Projects และ REST Docs พร้อมกัน
-      const [keyRes, whRes, extRes, projRes, docsRes] = await Promise.all([
+      // โหลด API key, Webhooks, Extensions, Projects, Folders และ REST Docs พร้อมกัน
+      const [keyRes, whRes, extRes, projRes, docsRes, foldRes] = await Promise.all([
         fetch('/api/keys'),
         fetch('/api/webhooks'),
         fetch('/api/extensions'),
         fetch('/api/projects'),
-        fetch('/api/docs')
+        fetch('/api/docs'),
+        fetch('/api/folders')
       ]);
 
-      const [keyData, whData, extData, projData, docsData] = await Promise.all([
+      const [keyData, whData, extData, projData, docsData, foldData] = await Promise.all([
         keyRes.json(),
         whRes.json(),
         extRes.json(),
         projRes.json(),
-        docsRes.json()
+        docsRes.json(),
+        foldRes.json()
       ]);
 
       setApiKeys(keyData.data || []);
       setWebhooks(whData.data || []);
       setExtensions(extData.data || []);
       setProjects(projData.data || []);
+      setFolders(foldData.data || []);
       setApiDocs(docsData);
 
       setLoading(false);
@@ -502,6 +509,22 @@ function SettingsCenterContent() {
                           placeholder="อธิบายสรุปขอบเขตงานสั้นๆ..."
                           className="w-full bg-zinc-950 border border-zinc-900 rounded-xl py-2 px-3 text-xs focus:outline-none focus:border-yellow-500 text-zinc-300"
                         />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] uppercase font-display tracking-widest text-zinc-500 font-bold text-[#FFD700]">จัดเก็บลงในโฟลเดอร์ปฏิบัติงาน (Choose Workspace Folder)</label>
+                        <select
+                          value={newProjectFolderId}
+                          onChange={(e) => setNewProjectFolderId(e.target.value)}
+                          className="w-full bg-zinc-950 border border-zinc-900 rounded-xl py-2.5 px-3 text-xs focus:outline-none focus:border-yellow-500 text-zinc-200 cursor-pointer"
+                        >
+                          <option value="">-- ไม่จัดเก็บลงในโฟลเดอร์ (Root Folder Space) --</option>
+                          {folders.map((f: any) => (
+                            <option key={f.id} value={f.id}>
+                              {f.parent_id ? `↳  ${f.name}` : `📁  ${f.name}`}
+                            </option>
+                          ))}
+                        </select>
                       </div>
 
                       {createProjectMsg && (

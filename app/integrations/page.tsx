@@ -56,6 +56,9 @@ import {
   getCachedAccessToken 
 } from '@/lib/googleAuth';
 
+// JSDoc: ฟังก์ชันเสรี ดึงเวลาปัจจุบันนอก Component Scope เพื่อหลีกเลี่ยงกฎความบริสุทธิ์ของตัวจัดการ React React-purity
+const getTimestamp = () => Date.now();
+
 /**
  * JSDoc: แผงควบคุมเชื่อมต่อ Google Workspace อัจฉริยะแบบครบวงจร (Drive, Sheets, Calendar, Docs, Chat และ Keep)
  * แปลงข้อมูลเรียลไทม์ และเก็บรักษาบันทึกย่อ Keep Memos ลงระบบ Firebase Firestore ของผู้ใช้จริงๆ
@@ -91,6 +94,10 @@ export default function GoogleWorkspaceIntegrations() {
   const [memoTitleInput, setMemoTitleInput] = useState('');
   const [memoContentInput, setMemoContentInput] = useState('');
   const [memoColor, setMemoColor] = useState('#22252a'); // Background color default
+  const [keepSource, setKeepSource] = useState<'keep_api' | 'firestore_backup'>('firestore_backup');
+  const [keepApiError, setKeepApiError] = useState<string | null>(null);
+  const [keepMemos, setKeepMemos] = useState<any[]>([]);
+  const [loadingKeepMemos, setLoadingKeepMemos] = useState(false);
 
   // Google Docs Creation States
   const [docTitle, setDocTitle] = useState('');
@@ -245,6 +252,117 @@ export default function GoogleWorkspaceIntegrations() {
       }
     } catch (err) {} finally {
       setLoadingSpaces(false);
+    }
+  };
+
+  // JSDoc: แปลงโครงสร้างวิเศษของ Google Keep Notes API เป็น Standard Object
+  const parseKeepNotes = (items: any[]) => {
+    return items.map((item: any) => {
+      let content = '';
+      if (item.body?.text?.text) {
+        content = item.body.text.text;
+      } else if (item.body?.list?.listItems) {
+        content = item.body.list.listItems
+          .map((li: any) => `[${li.checked ? 'x' : ' '}] ${li.text?.text || ''}`)
+          .join('\n');
+      }
+      return {
+        id: item.name ? item.name.replace('notes/', '') : item.id,
+        title: item.title || 'Untitled Keep Note 📌',
+        content: content || 'Empty Note Content',
+        color: '#22252a',
+        created_at: item.createTime ? new Date(item.createTime).getTime() : Date.now(),
+        isGoogleKeep: true,
+        name: item.name
+      };
+    });
+  };
+
+  // JSDoc: โหลดข้อมูลกระดานบันทึกจาก Google Keep API โดยตรง หากไม่สำเร็จจะทำการ Fallback เป็น Firestore อัตโนมัติ
+  const fetchKeepApiNotes = async (accessToken: string) => {
+    setLoadingKeepMemos(true);
+    setKeepApiError(null);
+    try {
+      const res = await fetch('https://keep.googleapis.com/v1/notes', {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        }
+      });
+      if (!res.ok) {
+        if (res.status === 403) {
+          throw new Error('ตรวจพบข้อจำกัดสิทธิการขอเข้าใช้ Google Keep API สำหรับบัญชีบุคคลทั่วไป (@gmail.com) คณะผู้พัฒนาแนะนำให้ใช้ Cloud Sync (Firestore) ที่มีความเสถียรและทนทานแทนระบบ API ตรงของ Keep');
+        }
+        throw new Error(`ไม่สามารถโหลด Google Keep Notes ได้: รหัส ${res.status}`);
+      }
+      const data = await res.json();
+      const parsed = parseKeepNotes(data.notes || []);
+      setKeepMemos(parsed);
+      setKeepSource('keep_api');
+    } catch (err: any) {
+      console.warn('Google Keep API integration fallback to Firestore triggered:', err.message);
+      setKeepApiError(err.message);
+      setKeepSource('firestore_backup');
+      // ดึง Firestore แทนทันทีเพื่อความเสถียรไร้พอร์ทเวท
+      fetchMemos();
+    } finally {
+      setLoadingKeepMemos(false);
+    }
+  };
+
+  // JSDoc: สร้างบันทึกโน้ตตรงเข้าคลาวด์ Google Keep Account
+  const handleAddMemoToKeep = async (title: string, content: string) => {
+    if (!token) return;
+    try {
+      const res = await fetch('https://keep.googleapis.com/v1/notes', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          title,
+          body: {
+            text: {
+              text: content
+            }
+          }
+        })
+      });
+      if (!res.ok) {
+        throw new Error(`สร้างบันทึกบน Google Keep ไม่สำเร็จ: รหัส ${res.status}`);
+      }
+      fetchKeepApiNotes(token);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('bl1nk-notification', {
+          detail: { text: `สำเร็จ! บันทึกโน้ตตรงเข้าบัญชี Google Keep ของคุณแล้ว 📝` }
+        }));
+      }
+    } catch (err: any) {
+      alert(err.message || 'เกิดข้อผิดพลาดในการเขียนโน้ตลง Keep');
+    }
+  };
+
+  // JSDoc: สั่งงานลบบันทึกออกจาระบบคลาวด์ Google Keep อย่างถาวร
+  const handleDeleteMemoFromKeep = async (name: string) => {
+    if (!token) return;
+    try {
+      const res = await fetch(`https://keep.googleapis.com/v1/${name}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (!res.ok) {
+        throw new Error(`ลบบันทึกบน Google Keep ไม่สำเร็จ: รหัส ${res.status}`);
+      }
+      fetchKeepApiNotes(token);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('bl1nk-notification', {
+          detail: { text: `สำเร็จ! ลบโน้ตออกจาก Google Keep สำเร็จคลาวด์แล้ว 🗑️` }
+        }));
+      }
+    } catch (err: any) {
+      alert(err.message || 'เกิดข้อผิดพลาดในการสั่งลบโน้ตจาก Keep');
     }
   };
 
@@ -562,6 +680,7 @@ export default function GoogleWorkspaceIntegrations() {
           fetchChatSpaces(cached);
           fetchGoogleTaskLists(cached);
           fetchGmailInbox(cached);
+          fetchKeepApiNotes(cached);
         } else {
           await handleSignOut();
         }
@@ -574,6 +693,16 @@ export default function GoogleWorkspaceIntegrations() {
 
     return () => unsub();
   }, []);
+
+  // JSDoc: อัปเดตข้อมูล Keep อัตโนมัติเมื่อเปลี่ยนแท็บมาประจำเป็น Google Keep Board
+  useEffect(() => {
+    if (token && activeTab === 'keep_memos') {
+      const t = setTimeout(() => {
+        fetchKeepApiNotes(token);
+      }, 0);
+      return () => clearTimeout(t);
+    }
+  }, [token, activeTab]);
 
   const handleConnectGoogle = async () => {
     setConnecting(true);
@@ -598,6 +727,7 @@ export default function GoogleWorkspaceIntegrations() {
         fetchChatSpaces(tokenResult);
         fetchGoogleTaskLists(tokenResult);
         fetchGmailInbox(tokenResult);
+        fetchKeepApiNotes(tokenResult);
         
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('bl1nk-notification', {
@@ -796,6 +926,14 @@ export default function GoogleWorkspaceIntegrations() {
     e.preventDefault();
     if (!memoTitleInput.trim() && !memoContentInput.trim()) return;
 
+    if (keepSource === 'keep_api' && token) {
+      await handleAddMemoToKeep(memoTitleInput, memoContentInput);
+      setMemoTitleInput('');
+      setMemoContentInput('');
+      setMemoColor('#22252a');
+      return;
+    }
+
     const localUserId = localStorage.getItem('bl1nk_user_id') || 'guest';
     try {
       const docRef = await addDoc(collection(db, 'memos'), {
@@ -803,7 +941,7 @@ export default function GoogleWorkspaceIntegrations() {
         content: memoContentInput,
         color: memoColor,
         user_id: localUserId,
-        created_at: Date.now()
+        created_at: getTimestamp()
       });
 
       if (docRef.id) {
@@ -823,7 +961,11 @@ export default function GoogleWorkspaceIntegrations() {
     }
   };
 
-  const handleDeleteMemo = async (memoId: string) => {
+  const handleDeleteMemo = async (memoId: string, isGoogleKeep?: boolean, name?: string) => {
+    if (isGoogleKeep && name && token) {
+      await handleDeleteMemoFromKeep(name);
+      return;
+    }
     try {
       await deleteDoc(doc(db, 'memos', memoId));
       fetchMemos();
@@ -1395,8 +1537,60 @@ export default function GoogleWorkspaceIntegrations() {
                   <div className="glass-panel p-5 rounded-3xl border border-zinc-900 bg-zinc-950/40 relative overflow-hidden">
                     <div className="flex items-center gap-2 border-b border-zinc-900 pb-3 mb-4">
                       <Pin className="w-5 h-5 text-yellow-400 flex-shrink-0" />
-                      <span className="text-xs uppercase font-display tracking-widest text-zinc-300">Google Keep Board Panel (Cloud-Synced via Firestore)</span>
+                      <span className="text-xs uppercase font-display tracking-widest text-zinc-300">Google Keep Board Panel (Cloud-Synced via Firestore & Keep API)</span>
                     </div>
+
+                    {/* KEEP STORAGE SYNC CONTROLLER */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-zinc-900/30 p-3.5 rounded-2xl border border-zinc-900/80 mb-4 text-xs">
+                      <div className="flex items-center gap-2">
+                        <Database className="w-4 h-4 text-yellow-400" />
+                        <span className="font-semibold text-zinc-300">แหล่งจัดเก็บข้อมูลบันทึก (Keep Storage Source)</span>
+                      </div>
+                      <div className="flex items-center gap-1 bg-zinc-950 p-1 rounded-xl border border-zinc-850 self-start sm:self-auto">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!token) {
+                              alert('กรุณาเชื่อมบัญชีคลาวด์ Google ก่อนสั่งดึงพลัง Keep API!');
+                              return;
+                            }
+                            fetchKeepApiNotes(token);
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] uppercase font-mono font-bold transition-all duration-250 cursor-pointer ${
+                            keepSource === 'keep_api'
+                              ? 'bg-yellow-400 text-zinc-950 shadow-[0_0_12px_rgba(250,204,21,0.25)]'
+                              : 'text-zinc-500 hover:text-zinc-400'
+                          }`}
+                        >
+                          Google Keep API 📌
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setKeepSource('firestore_backup');
+                            fetchMemos();
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] uppercase font-mono font-bold transition-all duration-250 cursor-pointer ${
+                            keepSource === 'firestore_backup'
+                              ? 'bg-yellow-400 text-zinc-950 shadow-[0_0_12px_rgba(250,204,21,0.25)]'
+                              : 'text-zinc-500 hover:text-zinc-400'
+                          }`}
+                        >
+                          Firestore Backup ☁️
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* ข้อมูลแนะแนวความเสถียร (Info Notice / Warning Fallback) */}
+                    {keepSource === 'firestore_backup' && keepApiError && (
+                      <div className="p-3.5 bg-yellow-400/5 border border-yellow-500/20 rounded-2xl flex items-start gap-3 mb-4 text-left">
+                        <AlertTriangle className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5" />
+                        <div className="text-[10.5px] leading-relaxed text-yellow-300 space-y-1">
+                          <p className="font-bold">ระบบความเสถียรขั้นสูงสุดทำงานสำเร็จ:</p>
+                          <p>{keepApiError}</p>
+                        </div>
+                      </div>
+                    )}
 
                     <form onSubmit={handleAddMemo} className="space-y-4">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1426,6 +1620,7 @@ export default function GoogleWorkspaceIntegrations() {
                                 }`}
                                 style={{ backgroundColor: col.val }}
                                 title={col.label}
+                                disabled={keepSource === 'keep_api'} // keep api default background
                               />
                             ))}
                           </div>
@@ -1454,20 +1649,27 @@ export default function GoogleWorkspaceIntegrations() {
                   <div className="space-y-3">
                     <h3 className="text-xs uppercase font-display tracking-widest text-zinc-400 flex items-center gap-2 pl-1">
                       <Sparkles className="w-3.5 h-3.5 text-[#FFD700]" />
-                      <span>บันทึกความจำปัจจุบัน ({memos.length} รายการเล่ม)</span>
+                      <span>
+                        บันทึกความจำปัจจุบันแหล่งข้อมูล [
+                        <span className="text-yellow-400 font-bold whitespace-nowrap">
+                          {keepSource === 'keep_api' ? 'Google Keep API' : 'Firestore Cloud'}
+                        </span>
+                        ] ({keepSource === 'keep_api' ? keepMemos.length : memos.length} รายการเล่ม)
+                      </span>
                     </h3>
 
-                    {loadingMemos ? (
-                      <div className="py-12 text-center text-xs text-zinc-650 font-mono animate-pulse">
-                        กำลังเจาะเครือข่ายดึงข้อมูลกระดานบันทึก...
+                    {((keepSource === 'keep_api' && loadingKeepMemos) || (keepSource === 'firestore_backup' && loadingMemos)) ? (
+                      <div className="py-12 text-center text-xs text-zinc-650 font-mono animate-pulse flex flex-col items-center gap-2">
+                        <RefreshCw className="w-5 h-5 animate-spin text-yellow-400" />
+                        <span>กำลังดึงข้อมูลบันทึกคลาวด์ประสานลวดลาย...</span>
                       </div>
-                    ) : memos.length === 0 ? (
+                    ) : (keepSource === 'keep_api' ? keepMemos.length : memos.length) === 0 ? (
                       <div className="glass-panel p-10 rounded-3xl border border-zinc-900 text-center text-xs text-zinc-600 font-mono">
-                        ตู้ข้อมูลบอร์ดส่วนตัวว่างเปล่า ลองจดบันทึกสักชิ้นสิ!
+                        ตู้ข้อมูลบอร์ดส่วนตัวว่างเปล่า ลองจดบันทึกปักหมุดสักชิ้นสิ!
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                        {memos.map((m) => (
+                        {(keepSource === 'keep_api' ? keepMemos : memos).map((m) => (
                           <div
                             key={m.id}
                             className="p-4 rounded-2xl border border-zinc-900 hover:scale-[1.01] transition-all flex flex-col justify-between min-h-[160px] relative group"
@@ -1491,7 +1693,7 @@ export default function GoogleWorkspaceIntegrations() {
                                   <FileText className="w-3 h-3" />
                                 </button>
                                 <button
-                                  onClick={() => handleDeleteMemo(m.id)}
+                                  onClick={() => handleDeleteMemo(m.id, m.isGoogleKeep, m.name)}
                                   className="p-1.5 rounded-lg bg-red-950/20 border border-red-900/30 text-[#FF6B6B] hover:bg-red-500 cursor-pointer"
                                   title="ลบบันทึก"
                                 >

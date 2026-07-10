@@ -34,6 +34,15 @@ export interface Project {
   created_at: string;
   drive_folder_id?: string;
   drive_folder_link?: string;
+  folder_id?: string | null;
+}
+
+export interface TaskComment {
+  id: string;
+  task_id: string;
+  author_name: string;
+  text: string;
+  created_at: string;
 }
 
 export interface Task {
@@ -52,6 +61,7 @@ export interface Task {
   actual_time?: number; // minutes
   parent_id?: string;
   tags: string[]; // tag names
+  comments?: TaskComment[];
   created_at: string;
   updated_at: string;
 }
@@ -184,7 +194,8 @@ const INITIAL_DB: DbStructure = {
         { name: 'Complexity', type: 'select', value: 'High' },
         { name: 'Target Framework', type: 'select', value: 'React' }
       ],
-      created_at: '2026-05-10T10:00:00Z'
+      created_at: '2026-05-10T10:00:00Z',
+      folder_id: 'fold_subwork'
     },
     {
       id: 'proj_brand',
@@ -200,7 +211,8 @@ const INITIAL_DB: DbStructure = {
         { name: 'Asset Density', type: 'number', value: 8 },
         { name: 'Visual Mood', type: 'text', value: 'Luxurious Minimialism' }
       ],
-      created_at: '2026-05-15T09:00:00Z'
+      created_at: '2026-05-15T09:00:00Z',
+      folder_id: 'fold_subwork'
     },
     {
       id: 'proj_wellness',
@@ -215,7 +227,8 @@ const INITIAL_DB: DbStructure = {
       custom_properties: [
         { name: 'Target Frequency', type: 'text', value: 'Daily' }
       ],
-      created_at: '2026-05-20T12:00:00Z'
+      created_at: '2026-05-20T12:00:00Z',
+      folder_id: 'fold_personal'
     }
   ],
   tasks: [

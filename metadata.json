@@ -1,6 +1,6 @@
 {
-  "name": "bl1nk ink",
-  "description": "The Intelligent Personal Operating System - A cinematic, elegant, and high-performance workspace for tasks, notes, databases, and automated workflows.",
+  "name": "Aura Workspace",
+  "description": "Aura Workspace (powered by bl1nk): The Intelligent Personal Operating System. A cinematic, elegant, and high-performance system for managing hierarchical tasks, notes, databases, and flow automations.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

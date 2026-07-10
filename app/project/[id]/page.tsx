@@ -85,9 +85,29 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
   const [aiError, setAiError] = useState<string | null>(null);
   const [showAiPanel, setShowAiPanel] = useState(false);
 
+  // Task Comments State
+  const [taskComments, setTaskComments] = useState<any[]>([]);
+  const [newCommentText, setNewCommentText] = useState('');
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+
   // Drag and Drop States for Kanban View
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [dragOverColId, setDragOverColId] = useState<string | null>(null);
+
+  /**
+   * JSDoc: สเตตสำหรับการกรองลำดับความสำคัญ (Priority Filter: all, high, medium, low)
+   */
+  const [kanbanPriorityFilter, setKanbanPriorityFilter] = useState<'all' | 'high' | 'medium' | 'low'>('all');
+
+  /**
+   * JSDoc: สเตตสำหรับการกรองวันครบกำหนดส่งงาน (Due Date Filter: all, overdue, today, upcoming)
+   */
+  const [kanbanDueDateFilter, setKanbanDueDateFilter] = useState<'all' | 'overdue' | 'today' | 'upcoming'>('all');
+
+  /**
+   * JSDoc: สเตตสำหรับการแบ่งแถว Swimlanes ในบอร์ดสะพรั่ง (Swimlane Mode: none, priority, type)
+   */
+  const [kanbanSwimlaneMode, setKanbanSwimlaneMode] = useState<'none' | 'priority' | 'type'>('priority');
 
   const handleDragStart = (e: React.DragEvent, taskId: string) => {
     setDraggingTaskId(taskId);
@@ -113,14 +133,91 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
     e.preventDefault();
   };
 
-  const handleDrop = async (e: React.DragEvent, colId: string) => {
+  /**
+   * JSDoc: ควบคุมตัวการอภัยการ์ดและบันทึกสเตจพร้อมปรับเปลี่ยนสถานะและพร็อพเพอร์ตี้ของแถว Swimlane (Drop Handler)
+   */
+  const handleDrop = async (e: React.DragEvent, colId: string, swimlaneId?: string) => {
     e.preventDefault();
     const taskId = e.dataTransfer.getData('text/plain') || draggingTaskId;
     setDraggingTaskId(null);
     setDragOverColId(null);
 
     if (taskId) {
-      await handleMoveTaskStatus(taskId, colId);
+      if (swimlaneId) {
+        if (kanbanSwimlaneMode === 'priority') {
+          await handleMoveTaskStatusAndProps(taskId, colId, { priority: swimlaneId });
+        } else if (kanbanSwimlaneMode === 'type') {
+          await handleMoveTaskStatusAndProps(taskId, colId, { type: swimlaneId });
+        }
+      } else {
+        await handleMoveTaskStatus(taskId, colId);
+      }
+    }
+  };
+
+  /**
+   * JSDoc: ซิงค์สถานะของภารกิจควบคู่ไปกับหมวดหมู่ลำดับความสำคัญหรือชนิดงาน (Swimlane Property Changer)
+   */
+  const handleMoveTaskStatusAndProps = async (
+    taskId: string, 
+    newStatus: string, 
+    extraProps: { priority?: string; type?: string }
+  ) => {
+    // TODO: เพิ่มประสิทธิภาพในการตรวจสอบสิทธิ์ (RLS Privilege Control check) เพิ่มเติมในภายหลัง
+    try {
+      const taskToMove = tasks.find((t) => t.id === taskId);
+      if (!taskToMove) return;
+
+      const updatedPriority = extraProps.priority || taskToMove.priority;
+      const updatedType = extraProps.type || taskToMove.type;
+
+      if (
+        taskToMove.status === newStatus && 
+        taskToMove.priority === updatedPriority && 
+        taskToMove.type === updatedType
+      ) return;
+
+      // อัปเดตทันทีแบบเร็ว (Optimistic update)
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === taskId
+            ? { ...t, status: newStatus, priority: updatedPriority as any, type: updatedType as any }
+            : t
+        )
+      );
+
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: newStatus,
+          priority: updatedPriority,
+          type: updatedType
+        })
+      });
+
+      if (!res.ok) {
+        // ดึงข้อมูลจริงกลับมาใหม่หากเซิร์ฟเวอร์แจ้งข้อผิดพลาด
+        loadWorkspace();
+      } else {
+        if (selectedTask?.id === taskId) {
+          setDrawerStatus(newStatus);
+          if (extraProps.priority) setDrawerPriority(extraProps.priority);
+          if (extraProps.type) setDrawerType(extraProps.type);
+        }
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('bl1nk-notification', {
+              detail: {
+                text: `อัปเดตสเตตัสภารกิจเป็น "${newStatus}" และจัดกลุ่มอย่างลื่นไหลเรียบร้อย`
+              }
+            })
+          );
+        }
+      }
+    } catch (err) {
+      console.error('Failed to update task across swimlanes', err);
+      loadWorkspace();
     }
   };
 
@@ -175,7 +272,11 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
     try {
       const projRes = await fetch(`/api/projects/${id}`);
       if (!projRes.ok) {
-        alert('Access Denied: คุณไม่มีสิทธิ์เข้าถึงหรือโปรเจกต์นี้ถูกย้ายลบแล้ว');
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('bl1nk-notification', {
+            detail: { text: 'Access Denied: คุณไม่มีสิทธิ์เข้าถึงหรือโปรเจกต์นี้ถูกย้ายลบแล้ว' }
+          }));
+        }
         router.push('/dashboard');
         return;
       }
@@ -280,6 +381,47 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
     setAiError(null);
     setAiPrompt('');
     setDrawerOpen(true);
+    loadComments(task.id);
+  };
+
+  const loadComments = async (taskId: string) => {
+    try {
+      const res = await fetch(`/api/comments?task_id=${taskId}`);
+      const json = await res.ok ? await res.json() : null;
+      if (json && json.data) {
+        setTaskComments(json.data);
+      } else {
+        setTaskComments([]);
+      }
+    } catch (e) {
+      setTaskComments([]);
+    }
+  };
+
+  const handleAddComment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTask || !newCommentText.trim()) return;
+    setIsSubmittingComment(true);
+    try {
+      const author_name = "Alex Morgan"; // Default mock session name
+      const res = await fetch('/api/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: selectedTask.id,
+          text: newCommentText,
+          author_name,
+        }),
+      });
+      if (res.ok) {
+        setNewCommentText('');
+        await loadComments(selectedTask.id);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsSubmittingComment(false);
+    }
   };
 
   // บันทึกความเปลี่ยนแปลงภายใน Drawer
@@ -305,7 +447,11 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
 
       const body = await res.json();
       if (!res.ok) {
-        alert(body.error || 'เกิดปัญหาตรวจสอบ Tag Rules ไม่ผ่าน');
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('bl1nk-notification', {
+            detail: { text: body.error || 'เกิดปัญหาตรวจสอบ Tag Rules ไม่ผ่าน' }
+          }));
+        }
         setDrawerSaving(false);
         return;
       }
@@ -571,72 +717,362 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
         { id: 'done', title: 'Deployed Done', borderCol: 'border-t-[#50C878]/20' }
       ];
 
-      return (
-        <div id="kanban-grid-board" className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-5">
-          {columns.map((col) => {
-            const colTasks = tasks.filter((t) => t.status === col.id);
-            return (
-              <div
-                key={col.id}
-                onDragOver={(e) => handleDragOver(e, col.id)}
-                onDragEnter={(e) => handleDragEnter(e, col.id)}
-                onDragLeave={handleDragLeave}
-                onDrop={(e) => handleDrop(e, col.id)}
-                className={`glass-panel p-4 rounded-2xl border-t-2 ${col.borderCol} flex flex-col gap-3 min-h-[420px] transition-all duration-200 ${
-                  dragOverColId === col.id 
-                    ? 'border-yellow-500/40 bg-yellow-500/[0.015] scale-[1.01] shadow-[0_0_20px_rgba(255,215,0,0.03)] outline-dashed outline-1 outline-yellow-500/20' 
-                    : ''
-                }`}
-              >
-                <div className="flex items-center justify-between border-b border-zinc-900/60 pb-1.5">
-                  <span className="text-[10px] font-display font-semibold uppercase tracking-widest text-zinc-400">
-                    {col.title}
-                  </span>
-                  <span className="px-1.5 py-0.5 rounded-full bg-zinc-950 border border-zinc-900 text-[10px] font-mono text-zinc-500">
-                    {colTasks.length}
-                  </span>
-                </div>
+      // โควต้าเทียบเคียงวันครบกำหนดตาม Mock Local Time ของวันนี้ใน metadata (2026-06-10)
+      const currentToday = '2026-06-10';
 
-                <div className="flex-grow space-y-2.5 overflow-y-auto max-h-[360px] pr-1">
-                  {colTasks.map((t) => (
-                    <div
-                      key={t.id}
-                      draggable
-                      onDragStart={(e) => handleDragStart(e, t.id)}
-                      onDragEnd={handleDragEnd}
-                      onClick={() => openTaskDrawer(t)}
-                      className={`p-3 bg-zinc-950/40 border rounded-xl cursor-grab duration-150 flex flex-col gap-2 relative group transition-all ${
-                        draggingTaskId === t.id 
-                          ? 'opacity-40 border-yellow-500/30 bg-yellow-500/5 scale-95 shadow-none' 
-                          : 'border-[#1a1a1a] hover:border-zinc-850 hover:bg-zinc-950/60 active:cursor-grabbing'
+      /**
+       * JSDoc: กรองภารกิจความเร็วสูงด้วยลำดับความสำคัญและเส้นเวลาครบส่ง
+       */
+      const filteredTasks = tasks.filter((t) => {
+        // กรองด้วยลำดับความสำคัญ (Priority Filter)
+        if (kanbanPriorityFilter !== 'all' && t.priority !== kanbanPriorityFilter) {
+          return false;
+        }
+
+        // กรองด้วยวันส่งเอกสาร (Due Date Filter)
+        if (kanbanDueDateFilter !== 'all') {
+          if (!t.due_date) return false;
+          if (kanbanDueDateFilter === 'overdue') {
+            return t.due_date < currentToday && t.status !== 'done';
+          } else if (kanbanDueDateFilter === 'today') {
+            return t.due_date === currentToday;
+          } else if (kanbanDueDateFilter === 'upcoming') {
+            return t.due_date > currentToday;
+          }
+        }
+        return true;
+      });
+
+      return (
+        <div className="space-y-6">
+          {/* แผงควบคุมตัวควบคุมด่วน (Dashboard Toolbar for Kanban) */}
+          <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl border border-zinc-900 bg-zinc-950/20 backdrop-blur-sm shadow-xl">
+            <div className="flex flex-wrap items-center gap-5 text-xs">
+              {/* ตัวกรองลัดลำดับความสำคัญ */}
+              <div className="flex items-center gap-1.5 bg-zinc-900/60 p-1.5 rounded-xl border border-zinc-950">
+                <span className="text-[9px] text-[#FFD700] uppercase tracking-widest font-display font-black px-1.5 py-0.5">Priority:</span>
+                {['all', 'high', 'medium', 'low'].map((p) => {
+                  const isActive = kanbanPriorityFilter === p;
+                  return (
+                    <button
+                      key={p}
+                      onClick={() => setKanbanPriorityFilter(p as any)}
+                      className={`px-3 py-1 rounded-lg text-[10px] uppercase font-mono font-bold transition-all duration-200 cursor-pointer ${
+                        isActive
+                          ? 'bg-[#FFD700] text-black shadow-[0_0_10px_rgba(255,215,0,0.2)]'
+                          : 'text-zinc-500 hover:text-zinc-350'
                       }`}
                     >
-                      <span className="text-xs font-semibold text-zinc-200 group-hover:text-yellow-500 duration-150 flex items-center gap-1.5 truncate">
-                        <span className="text-sm shrink-0">{t.icon || '📝'}</span>
-                        <span>{t.title}</span>
-                      </span>
-                      <div className="flex items-center justify-between text-[10px]">
-                        <span className={`px-1.5 py-0.2 rounded text-[8px] uppercase font-bold tracking-wider border ${
-                          t.priority === 'high' 
-                            ? 'bg-[#fce8e6] text-[#c5221f] border-[#fad2cf]' 
-                            : t.priority === 'medium'
-                            ? 'bg-[#fef7e0] text-[#b06000] border-[#feebc8]'
-                            : 'bg-[#e6f4ea] text-[#137333] border-[#ceead6]'
-                        }`}>
-                          {t.priority}
+                      {p}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* ตัวกรองปฏิทินวัน */}
+              <div className="flex items-center gap-1.5 bg-zinc-900/60 p-1.5 rounded-xl border border-zinc-950">
+                <span className="text-[9px] text-[#FFD700] uppercase tracking-widest font-display font-black px-1.5 py-0.5">Due Date:</span>
+                {['all', 'overdue', 'today', 'upcoming'].map((d) => {
+                  const isActive = kanbanDueDateFilter === d;
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => setKanbanDueDateFilter(d as any)}
+                      className={`px-3 py-1 rounded-lg text-[10px] uppercase font-mono font-bold transition-all duration-200 cursor-pointer ${
+                        isActive
+                          ? 'bg-[#FFD700] text-black shadow-[0_0_10px_rgba(255,215,0,0.2)]'
+                          : 'text-zinc-500 hover:text-zinc-350'
+                      }`}
+                    >
+                      {d}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* ส่วนสลับแถวจัดกลุ่ม (Swimlanes Selection) */}
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-[9px] text-zinc-500 uppercase tracking-widest font-display font-black">Swimlane view:</span>
+              <div className="flex items-center gap-1 bg-zinc-900/60 p-1.5 rounded-xl border border-zinc-950">
+                {[
+                  { id: 'none', label: 'No Swimlane' },
+                  { id: 'priority', label: 'By Priority' },
+                  { id: 'type', label: 'By Task Type' }
+                ].map((mode) => {
+                  const isActive = kanbanSwimlaneMode === mode.id;
+                  return (
+                    <button
+                      key={mode.id}
+                      onClick={() => setKanbanSwimlaneMode(mode.id as any)}
+                      className={`px-3 py-1 rounded-lg text-[10px] font-display font-extrabold transition-all duration-200 cursor-pointer border ${
+                        isActive
+                          ? 'bg-[#FFD700]/10 text-[#FFD700] border-[#FFD700]/25'
+                          : 'text-zinc-500 hover:text-zinc-350 border-transparent'
+                      }`}
+                    >
+                      {mode.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* ผืนโครงขยายคัมบังบอร์ดหลัก (Main Kanban Grid Canvas) */}
+          <div id="kanban-grid-board" className="w-full">
+            
+            {/* 1. โหมดบอร์ดเดี่ยวปรกติ (Standard Grid Board) */}
+            {kanbanSwimlaneMode === 'none' && (
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-5">
+                {columns.map((col) => {
+                  const colTasks = filteredTasks.filter((t) => t.status === col.id);
+                  return (
+                    <div
+                      key={col.id}
+                      onDragOver={(e) => handleDragOver(e, col.id)}
+                      onDragEnter={(e) => handleDragEnter(e, col.id)}
+                      onDragLeave={handleDragLeave}
+                      onDrop={(e) => handleDrop(e, col.id)}
+                      className={`glass-panel p-4 rounded-2xl border-t-2 ${col.borderCol} flex flex-col gap-3 min-h-[440px] transition-all duration-200 ${
+                        dragOverColId === col.id 
+                          ? 'border-yellow-500/40 bg-yellow-500/[0.015] scale-[1.01] shadow-[0_0_20px_rgba(255,215,0,0.03)] outline-dashed outline-1 outline-yellow-500/20' 
+                          : ''
+                      }`}
+                    >
+                      <div className="flex items-center justify-between border-b border-zinc-900/60 pb-1.5 flex-shrink-0">
+                        <span className="text-[10px] font-display font-semibold uppercase tracking-widest text-zinc-400">
+                          {col.title}
                         </span>
-                        <div className="flex items-center gap-1.5 font-mono text-[9px] text-zinc-650">
-                          <span>{t.id}</span>
-                          <span>•</span>
-                          <span>{t.due_date}</span>
-                        </div>
+                        <span className="px-1.5 py-0.5 rounded-full bg-zinc-950 border border-zinc-900 text-[10px] font-mono text-zinc-500">
+                          {colTasks.length}
+                        </span>
+                      </div>
+
+                      <div className="flex-grow space-y-2.5 overflow-y-auto max-h-[500px] pr-1">
+                        <AnimatePresence mode="popLayout">
+                          {colTasks.map((t) => (
+                            <motion.div
+                              layout
+                              layoutId={`kanban-task-${t.id}`}
+                              initial={{ opacity: 0, y: 12 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, scale: 0.95 }}
+                              transition={{ duration: 0.25, ease: 'easeOut' }}
+                              key={t.id}
+                              draggable
+                              onDragStart={(e) => handleDragStart(e, t.id)}
+                              onDragEnd={handleDragEnd}
+                              onClick={() => openTaskDrawer(t)}
+                              className={`p-3 bg-zinc-950/40 border rounded-xl cursor-grab duration-150 flex flex-col gap-2 relative group transition-all ${
+                                draggingTaskId === t.id 
+                                  ? 'opacity-40 border-yellow-500/30 bg-yellow-500/5 scale-95 shadow-none' 
+                                  : 'border-[#1a1a1a] hover:border-zinc-850 hover:bg-zinc-950/60 active:cursor-grabbing'
+                              }`}
+                            >
+                              <span className="text-xs font-semibold text-zinc-200 group-hover:text-yellow-500 duration-150 flex items-center gap-1.5 truncate">
+                                <span className="text-sm shrink-0">{t.icon || '📝'}</span>
+                                <span>{t.title}</span>
+                              </span>
+                              <div className="flex items-center justify-between text-[10px]">
+                                <span className={`px-1.5 py-0.2 rounded text-[8px] uppercase font-bold tracking-wider border ${
+                                  t.priority === 'high' 
+                                    ? 'bg-red-950/40 text-[#FF6B6B] border-red-900/40' 
+                                    : t.priority === 'medium'
+                                    ? 'bg-amber-950/40 text-[#FFD700] border-amber-900/40'
+                                    : 'bg-emerald-950/40 text-[#50C878] border-emerald-900/40'
+                                }`}>
+                                  {t.priority}
+                                </span>
+                                <div className="flex items-center gap-1.5 font-mono text-[9px] text-zinc-650">
+                                  <span>{t.id}</span>
+                                  <span>•</span>
+                                  <span>{t.due_date}</span>
+                                </div>
+                              </div>
+                            </motion.div>
+                          ))}
+                        </AnimatePresence>
                       </div>
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
-            );
-          })}
+            )}
+
+            {/* 2. โหมดแถวแนวระดับ Priority Swimlanes (By Priority) */}
+            {kanbanSwimlaneMode === 'priority' && (
+              <div className="space-y-6">
+                {[
+                  { id: 'high', label: 'High Priority Lane 🔴', color: 'border-l-red-500/50 bg-red-950/[0.02]', text: 'text-red-400' },
+                  { id: 'medium', label: 'Medium Priority Lane 🟡', color: 'border-l-amber-500/50 bg-amber-950/[0.02]', text: 'text-amber-400' },
+                  { id: 'low', label: 'Low Priority Lane 🟢', color: 'border-l-emerald-500/50 bg-emerald-900/[0.02]', text: 'text-emerald-400' }
+                ].map((lane) => {
+                  const laneTasks = filteredTasks.filter((t) => t.priority === lane.id);
+                  return (
+                    <div key={lane.id} className={`border border-zinc-900/60 rounded-2xl p-4 space-y-3.5 border-l-4 ${lane.color} shadow-lg transition-all hover:border-zinc-800`}>
+                      <div className="flex items-center justify-between text-xs font-display font-extrabold uppercase tracking-widest">
+                        <span className={`${lane.text}`}>{lane.label}</span>
+                        <span className="font-mono text-[9px] text-zinc-400 bg-zinc-950 border border-zinc-900 px-2.5 py-0.5 rounded-full">
+                          {laneTasks.length} items
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        {columns.map((col) => {
+                          const laneColTasks = laneTasks.filter((t) => t.status === col.id);
+                          return (
+                            <div
+                              key={col.id}
+                              onDragOver={(e) => handleDragOver(e, col.id)}
+                              onDragEnter={(e) => handleDragEnter(e, col.id)}
+                              onDragLeave={handleDragLeave}
+                              onDrop={(e) => handleDrop(e, col.id, lane.id)}
+                              className={`p-3.5 bg-zinc-950/45 border border-zinc-900/50 rounded-xl min-h-[160px] flex flex-col gap-2 transition-all duration-200 ${
+                                dragOverColId === col.id 
+                                  ? 'border-yellow-500/30 bg-yellow-500/[0.01]' 
+                                  : ''
+                              }`}
+                            >
+                              <div className="text-[9px] uppercase font-display tracking-widest text-[#FFD700]/70 flex items-center justify-between border-b border-zinc-900/30 pb-1.5 flex-shrink-0">
+                                <span>{col.title}</span>
+                                <span className="font-mono text-[8px] bg-zinc-900 px-1 rounded">{laneColTasks.length}</span>
+                              </div>
+
+                              <div className="flex-grow space-y-2 overflow-y-auto max-h-[220px] pr-0.5">
+                                <AnimatePresence mode="popLayout">
+                                  {laneColTasks.map((t) => (
+                                    <motion.div
+                                      layout
+                                      layoutId={`kanban-task-${t.id}`}
+                                      initial={{ opacity: 0, scale: 0.95 }}
+                                      animate={{ opacity: 1, scale: 1 }}
+                                      exit={{ opacity: 0, scale: 0.95 }}
+                                      transition={{ duration: 0.22, ease: 'easeInOut' }}
+                                      key={t.id}
+                                      draggable
+                                      onDragStart={(e) => handleDragStart(e, t.id)}
+                                      onDragEnd={handleDragEnd}
+                                      onClick={() => openTaskDrawer(t)}
+                                      className={`p-2.5 bg-zinc-950 border rounded-lg cursor-grab duration-150 flex flex-col gap-1.5 relative group transition-all ${
+                                        draggingTaskId === t.id 
+                                          ? 'opacity-40 border-yellow-500/30 scale-95' 
+                                          : 'border-zinc-900 hover:border-zinc-800'
+                                      }`}
+                                    >
+                                      <span className="text-xs font-medium text-zinc-300 group-hover:text-yellow-500 duration-150 flex items-center gap-1.5 truncate">
+                                        <span className="text-sm shrink-0">{t.icon || '📝'}</span>
+                                        <span>{t.title}</span>
+                                      </span>
+                                      <div className="flex items-center justify-between text-[9px] text-zinc-500 font-mono">
+                                        <span>{t.id}</span>
+                                        <span>{t.due_date}</span>
+                                      </div>
+                                    </motion.div>
+                                  ))}
+                                </AnimatePresence>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* 3. โหมดแถวแนวระดับ Task Type/Category Swimlanes (By Task Type) */}
+            {kanbanSwimlaneMode === 'type' && (
+              <div className="space-y-6">
+                {[
+                  { id: 'task', label: 'Direct Tasks 📝', color: 'border-l-blue-500/50 bg-blue-950/[0.015]', text: 'text-blue-400' },
+                  { id: 'milestone', label: 'Key Milestones 🏆', color: 'border-l-purple-500/50 bg-purple-950/[0.015]', text: 'text-purple-400' },
+                  { id: 'habit', label: 'Daily Habits 🔄', color: 'border-l-pink-500/50 bg-pink-950/[0.015]', text: 'text-pink-400' },
+                  { id: 'note', label: 'Knowledge Notes 📓', color: 'border-l-zinc-500/50 bg-zinc-950/[0.015]', text: 'text-zinc-400' },
+                  { id: 'event', label: 'Scheduled Events 📅', color: 'border-l-sky-500/50 bg-sky-950/[0.015]', text: 'text-sky-450' }
+                ].map((lane) => {
+                  const laneTasks = filteredTasks.filter((t) => t.type === lane.id);
+                  return (
+                    <div key={lane.id} className={`border border-zinc-900/60 rounded-2xl p-4 space-y-3.5 border-l-4 ${lane.color} shadow-lg transition-all hover:border-zinc-800`}>
+                      <div className="flex items-center justify-between text-xs font-display font-extrabold uppercase tracking-widest">
+                        <span className={`${lane.text}`}>{lane.label}</span>
+                        <span className="font-mono text-[9px] text-zinc-400 bg-zinc-950 border border-zinc-900 px-2.5 py-0.5 rounded-full">
+                          {laneTasks.length} items
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        {columns.map((col) => {
+                          const laneColTasks = laneTasks.filter((t) => t.status === col.id);
+                          return (
+                            <div
+                              key={col.id}
+                              onDragOver={(e) => handleDragOver(e, col.id)}
+                              onDragEnter={(e) => handleDragEnter(e, col.id)}
+                              onDragLeave={handleDragLeave}
+                              onDrop={(e) => handleDrop(e, col.id, lane.id)}
+                              className={`p-3.5 bg-zinc-950/45 border border-zinc-900/50 rounded-xl min-h-[160px] flex flex-col gap-2 transition-all duration-200 ${
+                                dragOverColId === col.id 
+                                  ? 'border-yellow-500/30 bg-yellow-500/[0.01]' 
+                                  : ''
+                              }`}
+                            >
+                              <div className="text-[9px] uppercase font-display tracking-widest text-[#FFD700]/70 flex items-center justify-between border-b border-zinc-900/30 pb-1.5 flex-shrink-0">
+                                <span>{col.title}</span>
+                                <span className="font-mono text-[8px] bg-zinc-900 px-1 rounded">{laneColTasks.length}</span>
+                              </div>
+
+                              <div className="flex-grow space-y-2 overflow-y-auto max-h-[220px] pr-0.5">
+                                <AnimatePresence mode="popLayout">
+                                  {laneColTasks.map((t) => (
+                                    <motion.div
+                                      layout
+                                      layoutId={`kanban-task-${t.id}`}
+                                      initial={{ opacity: 0, scale: 0.95 }}
+                                      animate={{ opacity: 1, scale: 1 }}
+                                      exit={{ opacity: 0, scale: 0.95 }}
+                                      transition={{ duration: 0.22, ease: 'easeInOut' }}
+                                      key={t.id}
+                                      draggable
+                                      onDragStart={(e) => handleDragStart(e, t.id)}
+                                      onDragEnd={handleDragEnd}
+                                      onClick={() => openTaskDrawer(t)}
+                                      className={`p-2.5 bg-zinc-950 border rounded-lg cursor-grab duration-150 flex flex-col gap-1.5 relative group transition-all ${
+                                        draggingTaskId === t.id 
+                                          ? 'opacity-40 border-yellow-500/30 scale-95' 
+                                          : 'border-zinc-900 hover:border-zinc-800'
+                                      }`}
+                                    >
+                                      <span className="text-xs font-medium text-zinc-300 group-hover:text-yellow-500 duration-150 flex items-center gap-1.5 truncate">
+                                        <span className="text-sm shrink-0">{t.icon || '📝'}</span>
+                                        <span>{t.title}</span>
+                                      </span>
+                                      <div className="flex items-center justify-between text-[9px] text-zinc-400">
+                                        <span className={`px-1 rounded text-[7px] font-mono border uppercase font-bold tracking-wider ${
+                                          t.priority === 'high' 
+                                            ? 'text-red-400 border-red-500/20 bg-red-950/20' 
+                                            : t.priority === 'medium' 
+                                            ? 'text-amber-400 border-amber-500/20 bg-amber-950/20' 
+                                            : 'text-emerald-400 border-emerald-500/20 bg-emerald-950/20'
+                                        }`}>{t.priority}</span>
+                                        <span className="font-mono text-[9px]">{t.due_date}</span>
+                                      </div>
+                                    </motion.div>
+                                  ))}
+                                </AnimatePresence>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            
+          </div>
         </div>
       );
     }
@@ -1274,6 +1710,61 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
                           )}
                         </div>
                       )}
+                    </div>
+
+                    {/* Section: Task Comments (Real-time Comments and Collaboration) */}
+                    <div className="space-y-4 border-t border-zinc-900/60 pt-5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-zinc-400 font-display text-[10px] uppercase tracking-widest flex items-center gap-2 font-bold">
+                          💬 Task Collaborator Comments
+                        </span>
+                        <span className="text-[10px] font-mono text-zinc-650 bg-zinc-950 px-2 py-0.5 rounded border border-zinc-900">
+                          {taskComments.length} comments
+                        </span>
+                      </div>
+
+                      {/* Comments List */}
+                      <div className="space-y-3.5 max-h-[220px] overflow-y-auto smooth-scroll pr-1">
+                        {taskComments.length === 0 ? (
+                          <p className="text-zinc-650 italic text-[11px] py-2">
+                            ไม่มีความคิดเห็นสำหรับงานนี้ ร่วมแสดงความเห็นคนแรกเลย!
+                          </p>
+                        ) : (
+                          taskComments.map((comment: any) => (
+                            <div key={comment.id} className="p-3 bg-zinc-950/60 border border-zinc-900 rounded-2xl space-y-1.5 hover:border-zinc-800 duration-150">
+                              <div className="flex items-center justify-between">
+                                <span className="font-display font-semibold text-[#FFD700] text-[11px]">
+                                  {comment.author_name}
+                                </span>
+                                <span className="text-[9px] font-mono text-zinc-550">
+                                  {new Date(comment.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+                              <p className="text-xs text-zinc-350 leading-relaxed font-sans">{comment.text}</p>
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      {/* Post Comment Input Form */}
+                      <form onSubmit={handleAddComment} className="flex gap-2 pt-2">
+                        <input
+                          type="text"
+                          required
+                          value={newCommentText}
+                          onChange={(e) => setNewCommentText(e.target.value)}
+                          placeholder="พิมพ์ข้อความแลกเปลี่ยนความคิดเห็น..."
+                          className="flex-grow bg-zinc-950 border border-zinc-900 rounded-xl px-3 py-2 text-xs text-zinc-200 placeholder-zinc-655 focus:outline-none focus:border-yellow-500"
+                          disabled={isSubmittingComment}
+                        />
+                        <button
+                          type="submit"
+                          disabled={isSubmittingComment || !newCommentText.trim()}
+                          className="bg-zinc-900 hover:bg-zinc-850 text-[#FFD700] border border-zinc-850 hover:border-yellow-500/20 px-4 py-2 rounded-xl text-[10px] font-display font-bold uppercase tracking-wider duration-150 disabled:opacity-40 cursor-pointer"
+                        >
+                          {isSubmittingComment ? 'Sending' : 'Comment'}
+                        </button>
+                      </form>
                     </div>
 
                   </div>

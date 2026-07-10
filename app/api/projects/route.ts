@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { name, description, is_favorite, custom_properties, google_access_token } = await req.json();
+    const { name, description, is_favorite, custom_properties, google_access_token, folder_id } = await req.json();
 
     if (!name) {
       return NextResponse.json({ error: 'กรุณากรอกชื่อโปรเจกต์' }, { status: 400 });
@@ -101,6 +101,7 @@ export async function POST(req: NextRequest) {
       created_at: new Date().toISOString(),
       drive_folder_id: driveFolderId,
       drive_folder_link: driveFolderLink,
+      folder_id: folder_id || null,
     };
 
     db.projects.push(newProject);
