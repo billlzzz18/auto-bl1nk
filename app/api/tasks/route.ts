@@ -12,7 +12,9 @@ import {
   getOrAuthenticateUser,
   sortTasks,
   paginateTasks,
+  validateInput,
 } from "@/lib/api-helpers";
+import { createTaskSchema } from "@/lib/validation";
 
 /**
  * JSDoc: บริหารจัดการงาน (GET/POST /api/tasks)
@@ -87,6 +89,13 @@ export async function POST(req: NextRequest) {
       return errorResponse("Unauthorized", 401);
     }
 
+    const body = await req.json();
+    const validation = validateInput(createTaskSchema, body);
+
+    if (validation.error) {
+      return errorResponse(validation.error, 400);
+    }
+
     const {
       title,
       project_id,
@@ -101,14 +110,9 @@ export async function POST(req: NextRequest) {
       actual_time,
       parent_id,
       tags,
-    } = await req.json();
-
-    if (!title || !project_id) {
-      return errorResponse("กรุณากรอกชื่อหัวข้องานและระบุโปรเจกต์", 400);
-    }
+    } = validation.data!;
 
     const db = getDb();
-    const normalizedType = type || "task";
     const normalizedDueDate =
       due_date || new Date().toISOString().split("T")[0];
 

@@ -4,25 +4,19 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db/client";
 import { hashPassword, setSessionUser } from "@/lib/auth";
 import { account, project, tag, task, user } from "@/lib/db/schema";
-import { errorResponse } from "@/lib/api-helpers";
+import { errorResponse, validateInput } from "@/lib/api-helpers";
+import { authRegisterSchema } from "@/lib/validation";
 
 export async function POST(req: NextRequest) {
   try {
-    const { email, password, name } = await req.json();
+    const body = await req.json();
+    const validation = validateInput(authRegisterSchema, body);
 
-    if (!email || !password || !name) {
-      return errorResponse("กรุณากรอกข้อมูลให้ครบถ้วน", 400);
+    if (validation.error) {
+      return errorResponse(validation.error, 400);
     }
 
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return errorResponse("รูปแบบอีเมลไม่ถูกต้อง", 400);
-    }
-
-    if (password.length < 6) {
-      return errorResponse("รหัสผ่านต้องยาวไม่น้อยกว่า 6 ตัวอักษร", 400);
-    }
-
+    const { email, password, name } = validation.data!;
     const db = getDb();
     const [existingUser] = await db
       .select()

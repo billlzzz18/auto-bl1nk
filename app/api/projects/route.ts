@@ -11,7 +11,9 @@ import {
   createdResponse,
   getOrAuthenticateUser,
   createGoogleDriveFolder,
+  validateInput,
 } from "@/lib/api-helpers";
+import { createProjectSchema } from "@/lib/validation";
 
 export async function GET(req: NextRequest) {
   try {
@@ -58,18 +60,20 @@ export async function POST(req: NextRequest) {
       return errorResponse("Unauthorized", 401);
     }
 
+    const body = await req.json();
+    const validation = validateInput(createProjectSchema, body);
+
+    if (validation.error) {
+      return errorResponse(validation.error, 400);
+    }
+
     const {
       name,
       description,
       is_favorite,
       custom_properties,
-      google_access_token,
-      folder_id,
-    } = await req.json();
-
-    if (!name) {
-      return errorResponse("กรุณากรอกชื่อโปรเจกต์", 400);
-    }
+    } = validation.data!;
+    const { google_access_token, folder_id } = body;
 
     const { folderId: driveFolderId, folderLink: driveFolderLink } =
       google_access_token

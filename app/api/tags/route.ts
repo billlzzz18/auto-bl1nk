@@ -5,7 +5,8 @@ import { getDb } from "@/lib/db/client";
 import { getSessionUser } from "@/lib/auth";
 import { tag, tagRule } from "@/lib/db/schema";
 import { toTag, toTagRule } from "@/lib/db/orm";
-import { errorResponse, successResponse, createdResponse, getUserItems, deleteUserItem } from "@/lib/api-helpers";
+import { errorResponse, successResponse, createdResponse, getUserItems, deleteUserItem, validateInput } from "@/lib/api-helpers";
+import { createTagSchema } from "@/lib/validation";
 
 /**
  * JSDoc: ตรวจสอบและบันทึกแท็กพ่วงกฎกำหนดขอบเขต (GET/POST /api/tags)
@@ -41,14 +42,16 @@ export async function POST(req: NextRequest) {
     const db = getDb();
 
     if (action === "create_tag") {
-      if (!name) {
-        return errorResponse("กรุณากรอกชื่อแท็ก", 400);
+      const tagValidation = validateInput(createTagSchema, { name, color });
+      if (tagValidation.error) {
+        return errorResponse(tagValidation.error, 400);
       }
 
+      const { name: validName, color: validColor } = tagValidation.data!;
       const [exists] = await db
         .select()
         .from(tag)
-        .where(and(eq(tag.userId, user.id), ilike(tag.name, name)))
+        .where(and(eq(tag.userId, user.id), ilike(tag.name, validName)))
         .limit(1);
       if (exists) {
         return errorResponse("มีแท็กชื่อนี้อยู่แล้ว", 400);
@@ -59,8 +62,8 @@ export async function POST(req: NextRequest) {
         .insert(tag)
         .values({
           id: newTagId,
-          name,
-          color: color || "#FFD700",
+          name: validName,
+          color: validColor,
           userId: user.id,
         })
         .returning();

@@ -1,6 +1,20 @@
 import { NextResponse } from "next/server";
 import { Database } from "drizzle-orm";
 import { and, eq } from "drizzle-orm";
+import { z } from "zod";
+
+export function validateInput<T>(schema: z.ZodSchema<T>, data: unknown): { error?: string; data?: T } {
+  try {
+    const validated = schema.parse(data);
+    return { data: validated };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const messages = error.errors.map((e) => e.message).join(", ");
+      return { error: messages };
+    }
+    return { error: "Invalid input" };
+  }
+}
 
 export function errorResponse(message: string, status: number = 500) {
   return NextResponse.json({ error: message }, { status });

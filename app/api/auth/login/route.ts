@@ -3,16 +3,19 @@ import { eq, ilike } from "drizzle-orm";
 import { getDb } from "@/lib/db/client";
 import { hashPassword, setSessionUser } from "@/lib/auth";
 import { account, user } from "@/lib/db/schema";
-import { errorResponse } from "@/lib/api-helpers";
+import { errorResponse, validateInput } from "@/lib/api-helpers";
+import { authLoginSchema } from "@/lib/validation";
 
 export async function POST(req: NextRequest) {
   try {
-    const { email, password } = await req.json();
+    const body = await req.json();
+    const validation = validateInput(authLoginSchema, body);
 
-    if (!email || !password) {
-      return errorResponse("กรุณากรอกอีเมลและรหัสผ่าน", 400);
+    if (validation.error) {
+      return errorResponse(validation.error, 400);
     }
 
+    const { email, password } = validation.data!;
     const db = getDb();
     const [existingUser] = await db
       .select()
