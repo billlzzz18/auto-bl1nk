@@ -1,39 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb, saveDb } from '@/lib/db';
+import { and, eq } from 'drizzle-orm';
+import { getDb } from '@/lib/db/client';
 import { getSessionUser } from '@/lib/auth';
+import { folder, project } from '@/lib/db/schema';
+import { errorResponse } from '@/lib/api-helpers';
 
-/**
- * JSDoc: ลบโฟลเดอร์สำหรับโครงสร้าง Node พร้อม Cascade ความสัมพันธ์ (DELETE /api/folders/[id])
- */
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const user = await getSessionUser();
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return errorResponse('Unauthorized', 401);
     }
 
-    const { id } = params;
+    const { id } = await params;
     const db = getDb();
-    
-    // ค้นหาและตรวจสอบโฟลเดอร์เป้าหมาย
-    const folderIndex = db.folders.findIndex((f) => f.id === id && f.user_id === user.id);
-    if (folderIndex === -1) {
-      return NextResponse.json({ error: 'ไม่พบโฟลเดอร์ระบุ หรือคุณไม่มีสิทธิ์ในการจัดการข้อมูลนี้' }, { status: 404 });
+
+    const [targetFolder] = await db
+      .select()
+      .from(folder)
+      .where(and(eq(folder.id, id), eq(folder.userId, user.id)))
+      .limit(1);
+
+    if (!targetFolder) {
+      return errorResponse('ไม่พบโฟลเดอร์ระบุ หรือคุณไม่มีสิทธิ์ในการจัดการข้อมูลนี้', 404);
     }
 
-    // ลบโฟลเดอร์
-    db.folders.splice(folderIndex, 1);
+    await db.delete(folder).where(eq(folder.id, id));
 
-    // ปรับความสัมพันธ์ของโปรเจกต์ที่อยู่ภายใต้โฟลเดอร์นี้ให้กลายเป็นอิสระ (null) ดักการทำงาน Cascade
-    db.projects = db.projects.map((p) => p.folder_id === id ? { ...p, folder_id: null } : p);
+    await db
+      .update(project)
+      .set({ folderId: null })
+      .where(eq(project.folderId, id));
 
-    // ปรับโฟลเดอร์ย่อยยกระดับขึ้นเป็นโฟลเดอร์หลัก (Root)
-    db.folders = db.folders.map((f) => f.parent_id === id ? { ...f, parent_id: null } : f);
-
-    saveDb(db);
+    await db
+      .update(folder)
+      .set({ parentId: null })
+      .where(eq(folder.parentId, id));
 
     return NextResponse.json({ message: 'ลบโฟลเดอร์เรียบร้อยแล้ว' });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return errorResponse(e.message, 500);
   }
 }
