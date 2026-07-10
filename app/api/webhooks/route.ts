@@ -1,6 +1,18 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getDb, saveDb, Webhook } from '@/lib/db';
-import { getSessionUser } from '@/lib/auth';
+import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
+import { and, eq } from "drizzle-orm";
+import { getDb } from "@/lib/db/client";
+import { getSessionUser } from "@/lib/auth";
+import { webhook } from "@/lib/db/schema";
+import { toWebhook } from "@/lib/db/orm";
+import {
+  errorResponse,
+  successResponse,
+  createdResponse,
+  getUserItems,
+  deleteUserItem,
+  toggleUserItemActive,
+} from "@/lib/api-helpers";
 
 /**
  * JSDoc: ตรวจสอบและบันทึก Webhooks (GET/POST /api/webhooks)
@@ -9,15 +21,14 @@ export async function GET(req: NextRequest) {
   try {
     const user = await getSessionUser();
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return errorResponse("Unauthorized", 401);
     }
 
     const db = getDb();
-    const userWebhooks = db.webhooks.filter((w) => w.user_id === user.id);
-
-    return NextResponse.json({ data: userWebhooks });
+    const userWebhooks = await getUserItems(db, webhook, user.id, toWebhook);
+    return successResponse(userWebhooks);
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return errorResponse(e.message);
   }
 }
 
@@ -25,47 +36,41 @@ export async function POST(req: NextRequest) {
   try {
     const user = await getSessionUser();
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return errorResponse("Unauthorized", 401);
     }
 
     const { action, id, url, events } = await req.json();
     const db = getDb();
 
-    if (action === 'delete') {
-      db.webhooks = db.webhooks.filter((w) => !(w.id === id && w.user_id === user.id));
-      saveDb(db);
-      return NextResponse.json({ message: 'ลบ Webhook เรียบร้อย' });
+    if (action === "delete") {
+      return await deleteUserItem(db, webhook, id, user.id, "ลบ Webhook เรียบร้อย");
     }
 
-    if (action === 'toggle') {
-      const wh = db.webhooks.find((w) => w.id === id && w.user_id === user.id);
-      if (wh) {
-        wh.isActive = !wh.isActive;
-        saveDb(db);
-        return NextResponse.json({ message: 'เปลี่ยนสถานะ Webhook เรียบร้อย', data: wh });
-      }
-      return NextResponse.json({ error: 'ไม่พบ Webhook' }, { status: 404 });
+    if (action === "toggle") {
+      return await toggleUserItemActive(db, webhook, id, user.id, toWebhook, "เปลี่ยนสถานะ Webhook เรียบร้อย");
     }
 
     if (!url || !events || !events.length) {
-      return NextResponse.json({ error: 'กรุณากรอก URL และเลือก Event อย่างน้อย 1 รายการ' }, { status: 400 });
+      return errorResponse("กรุณากรอก URL และเลือก Event อย่างน้อย 1 รายการ", 400);
     }
 
-    const newWebhook: Webhook = {
-      id: 'web_' + Math.random().toString(36).substr(2, 9),
-      url,
-      events,
-      isActive: true,
-      user_id: user.id,
-      created_at: new Date().toISOString()
-    };
+    const webId = `web_${randomUUID()}`;
+    const [created] = await db
+      .insert(webhook)
+      .values({
+        id: webId,
+        url,
+        events,
+        isActive: true,
+        userId: user.id,
+      })
+      .returning();
 
-    db.webhooks.push(newWebhook);
-    saveDb(db);
-
-    return NextResponse.json({ message: 'สร้าง Webhook สำเร็จ', data: newWebhook }, { status: 201 });
-
+    return createdResponse(
+      created ? toWebhook(created) : null,
+      "สร้าง Webhook สำเร็จ",
+    );
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return errorResponse(e.message);
   }
 }

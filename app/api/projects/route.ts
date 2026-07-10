@@ -1,115 +1,112 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getDb, saveDb, Project } from '@/lib/db';
-import { getSessionUser, authenticateApiKey } from '@/lib/auth';
+import { NextRequest, NextResponse } from "next/server";
+import { desc, eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { getDb } from "@/lib/db/client";
+import { getSessionUser, authenticateApiKey } from "@/lib/auth";
+import { project } from "@/lib/db/schema";
+import { toProject } from "@/lib/db/orm";
+import {
+  errorResponse,
+  successResponse,
+  createdResponse,
+  getOrAuthenticateUser,
+  createGoogleDriveFolder,
+  validateInput,
+} from "@/lib/api-helpers";
+import { createProjectSchema } from "@/lib/validation";
 
-/**
- * JSDoc: ค้นหาและสร้างฐานข้อมูลโปรเจกต์ (GET/POST /api/projects)
- * รองรับทั้ง Session Cookies และ Token Bearer API Key สำหรับนักพัฒนา พร้อมระบบแยกข้อมูลขาด (RLS)
- */
 export async function GET(req: NextRequest) {
   try {
-    let user = await getSessionUser();
-    if (!user) {
-      const authHeader = req.headers.get('Authorization');
-      user = authenticateApiKey(authHeader);
-    }
+    const currentUser = await getOrAuthenticateUser(
+      req,
+      getSessionUser,
+      authenticateApiKey,
+    );
 
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!currentUser) {
+      return errorResponse("Unauthorized", 401);
     }
 
     const { searchParams } = new URL(req.url);
-    const favOnly = searchParams.get('favorite') === 'true';
+    const favOnly = searchParams.get("favorite") === "true";
 
     const db = getDb();
-    let userProjects = db.projects.filter((p) => p.user_id === user.id);
+    const rows = await db
+      .select()
+      .from(project)
+      .where(eq(project.userId, currentUser.id))
+      .orderBy(desc(project.createdAt));
+    let userProjects = rows.map(toProject);
 
     if (favOnly) {
-      userProjects = userProjects.filter((p) => p.is_favorite);
+      userProjects = userProjects.filter((item) => item.is_favorite);
     }
 
-    // เรียงเวลาจากใหม่ไปเก่า
-    userProjects.sort((a,b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-    return NextResponse.json({ data: userProjects });
-
+    return successResponse(userProjects);
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || 'Internal Server Error' }, { status: 500 });
+    return errorResponse(e.message || "Internal Server Error");
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    let user = await getSessionUser();
-    if (!user) {
-      const authHeader = req.headers.get('Authorization');
-      user = authenticateApiKey(authHeader);
+    const currentUser = await getOrAuthenticateUser(
+      req,
+      getSessionUser,
+      authenticateApiKey,
+    );
+
+    if (!currentUser) {
+      return errorResponse("Unauthorized", 401);
     }
 
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const body = await req.json();
+    const validation = validateInput(createProjectSchema, body);
+
+    if (validation.error) {
+      return errorResponse(validation.error, 400);
     }
 
-    const { name, description, is_favorite, custom_properties, google_access_token, folder_id } = await req.json();
+    const {
+      name,
+      description,
+      is_favorite,
+      custom_properties,
+    } = validation.data!;
+    const { google_access_token, folder_id } = body;
 
-    if (!name) {
-      return NextResponse.json({ error: 'กรุณากรอกชื่อโปรเจกต์' }, { status: 400 });
-    }
-
-    let driveFolderId = undefined;
-    let driveFolderLink = undefined;
-
-    if (google_access_token) {
-      try {
-        const driveRes = await fetch('https://www.googleapis.com/drive/v3/files', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${google_access_token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            name: `${name}_workspace_folder`,
-            mimeType: 'application/vnd.google-apps.folder',
-          }),
-        });
-        if (driveRes.ok) {
-          const driveData = await driveRes.json();
-          driveFolderId = driveData.id;
-          driveFolderLink = `https://drive.google.com/drive/folders/${driveFolderId}`;
-        } else {
-          console.error('Failed to create Drive folder:', await driveRes.text());
-        }
-      } catch (err) {
-        console.error('Error creating Google Drive folder:', err);
-      }
-    }
+    const { folderId: driveFolderId, folderLink: driveFolderLink } =
+      google_access_token
+        ? await createGoogleDriveFolder(name, google_access_token)
+        : {};
 
     const db = getDb();
-    const projId = 'proj_' + Math.random().toString(36).substr(2, 9);
-    
-    const newProject: Project = {
-      id: projId,
-      name,
-      description: description || '',
-      user_id: user.id,
-      is_favorite: !!is_favorite,
-      sharing_settings: {
-        public_access: false,
-        include_subpages: false,
-      },
-      custom_properties: custom_properties || [],
-      created_at: new Date().toISOString(),
-      drive_folder_id: driveFolderId,
-      drive_folder_link: driveFolderLink,
-      folder_id: folder_id || null,
-    };
+    const projId = `proj_${randomUUID()}`;
 
-    db.projects.push(newProject);
-    saveDb(db);
+    const [created] = await db
+      .insert(project)
+      .values({
+        id: projId,
+        name,
+        description: description || "",
+        userId: currentUser.id,
+        isFavorite: !!is_favorite,
+        sharingSettings: {
+          public_access: false,
+          include_subpages: false,
+        },
+        customProperties: custom_properties || [],
+        driveFolderId,
+        driveFolderLink,
+        folderId: folder_id || null,
+      })
+      .returning();
 
-    return NextResponse.json({ message: 'สร้างโปรเจกต์เรียบร้อย', data: newProject }, { status: 201 });
-
+    return createdResponse(
+      created ? toProject(created) : null,
+      "สร้างโปรเจกต์เรียบร้อย",
+    );
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || 'Internal Server Error' }, { status: 500 });
+    return errorResponse(e.message || "Internal Server Error");
   }
 }

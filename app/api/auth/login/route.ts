@@ -1,46 +1,56 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
-import { hashPassword, setSessionUser } from '@/lib/auth';
+import { NextRequest, NextResponse } from "next/server";
+import { eq, ilike } from "drizzle-orm";
+import { getDb } from "@/lib/db/client";
+import { hashPassword, setSessionUser } from "@/lib/auth";
+import { account, user } from "@/lib/db/schema";
+import { errorResponse, validateInput } from "@/lib/api-helpers";
+import { authLoginSchema } from "@/lib/validation";
 
-/**
- * JSDoc: ลงชื่อเข้าสู่ระบบ (User Login Endpoint)
- * รองรับการเปรียบเทียบรหัสผ่านที่ทำ Hash และสร้าง HttpOnly Cookie Session
- */
 export async function POST(req: NextRequest) {
   try {
-    const { email, password } = await req.json();
+    const body = await req.json();
+    const validation = validateInput(authLoginSchema, body);
 
-    if (!email || !password) {
-      return NextResponse.json({ error: 'กรุณากรอกอีเมลและรหัสผ่าน' }, { status: 400 });
+    if (validation.error) {
+      return errorResponse(validation.error, 400);
     }
 
+    const { email, password } = validation.data!;
     const db = getDb();
-    const user = db.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    const [existingUser] = await db
+      .select()
+      .from(user)
+      .where(ilike(user.email, email))
+      .limit(1);
 
-    if (!user) {
-      return NextResponse.json({ error: 'ไม่พบบัญชีผู้ใช้ในระบบ หรืออีเมลไม่ถูกต้อง' }, { status: 400 });
+    if (!existingUser) {
+      return errorResponse("ไม่พบบัญชีผู้ใช้ในระบบ หรืออีเมลไม่ถูกต้อง", 400);
     }
+
+    const [credential] = await db
+      .select()
+      .from(account)
+      .where(eq(account.userId, existingUser.id))
+      .limit(1);
 
     const inputHash = hashPassword(password);
-    if (user.passwordHash !== inputHash) {
-      return NextResponse.json({ error: 'รหัสผ่านไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง' }, { status: 400 });
+    if (credential?.password !== inputHash) {
+      return errorResponse("รหัสผ่านไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง", 400);
     }
 
-    // เซ็ต Session Cookie
-    await setSessionUser(user.id);
+    await setSessionUser(existingUser.id);
 
     return NextResponse.json({
-      message: 'เข้าสู่ระบบสำเร็จ',
+      message: "เข้าสู่ระบบสำเร็จ",
       user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        avatar: user.avatar,
-        bio: user.bio,
+        id: existingUser.id,
+        email: existingUser.email,
+        name: existingUser.name,
+        avatar: existingUser.image,
+        bio: "",
       },
     });
-
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || 'เกิดข้อผิดพลาดภายในระบบ' }, { status: 500 });
+    return errorResponse(e.message || "เกิดข้อผิดพลาดภายในระบบ", 500);
   }
 }

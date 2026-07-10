@@ -5,3 +5,5 @@ coverage/
 *.log
 .env*
 !.env.example
+skills-loxk.json
+package-lock.json

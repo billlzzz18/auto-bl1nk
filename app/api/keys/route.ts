@@ -1,7 +1,12 @@
-import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
-import { getDb, saveDb, ApiKey } from '@/lib/db';
-import { getSessionUser } from '@/lib/auth';
+import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
+import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
+import { getDb } from "@/lib/db/client";
+import { getSessionUser } from "@/lib/auth";
+import { apiKey } from "@/lib/db/schema";
+import { toApiKey } from "@/lib/db/orm";
+import { errorResponse, successResponse, createdResponse, getUserItems, deleteUserItem } from "@/lib/api-helpers";
 
 /**
  * JSDoc: บริหารจัดการสิทธิ์การเชื่อมต่อ API Keys สำหรับนักพัฒนา (GET/POST /api/keys)
@@ -11,15 +16,14 @@ export async function GET(req: NextRequest) {
   try {
     const user = await getSessionUser();
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return errorResponse("Unauthorized", 401);
     }
 
     const db = getDb();
-    const userKeys = db.apiKeys.filter((k) => k.user_id === user.id);
-
-    return NextResponse.json({ data: userKeys });
+    const userKeys = await getUserItems(db, apiKey, user.id, toApiKey);
+    return successResponse(userKeys);
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return errorResponse(e.message);
   }
 }
 
@@ -27,51 +31,44 @@ export async function POST(req: NextRequest) {
   try {
     const user = await getSessionUser();
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return errorResponse("Unauthorized", 401);
     }
 
     const body = await req.json();
     const db = getDb();
 
-    if (body.action === 'delete') {
-      db.apiKeys = db.apiKeys.filter((k) => !(k.id === body.id && k.user_id === user.id));
-      saveDb(db);
-      return NextResponse.json({ message: 'ลบ API Key เรียบร้อย' });
+    if (body.action === "delete") {
+      return await deleteUserItem(db, apiKey, body.id, user.id, "ลบ API Key เรียบร้อย");
     }
 
-    const name = body.name || 'New Custom Integration Cli';
-
-    // สุ่มสร้าง API Key ที่ปลอดภัยสูง
-    const randomBytes = crypto.randomBytes(18).toString('hex'); // 36 ตัวอักษร
+    const name = body.name || "New Custom Integration Cli";
+    const randomBytes = crypto.randomBytes(18).toString("hex");
     const rawKey = `bl1nk_sec_${randomBytes}`;
-    
-    // ทำหน้ากากปกปิด (Masked)
     const masked_key = `bl1nk_...${rawKey.slice(-5)}`;
 
-    const newKeyRecord: ApiKey = {
-      id: 'key_' + Math.random().toString(36).substr(2, 9),
-      key: rawKey,
-      masked_key,
-      name,
-      user_id: user.id,
-      created_at: new Date().toISOString()
-    };
+    const keyId = `key_${randomUUID()}`;
+    const [createdKey] = await db
+      .insert(apiKey)
+      .values({
+        id: keyId,
+        key: rawKey,
+        maskedKey: masked_key,
+        name,
+        userId: user.id,
+      })
+      .returning();
 
-    db.apiKeys.push(newKeyRecord);
-    saveDb(db);
-
-    return NextResponse.json({
-      message: 'สร้าง API Key สำเร็จ! กรุณาคัดลอกและบันทึกคีย์นี้ทันที เพราะระบบจะแสดงคีย์นีเพียงครั้งเดียวเท่านั้น',
-      data: {
-        id: newKeyRecord.id,
-        name: newKeyRecord.name,
-        raw_key: rawKey, // แสดงแค่รอบแรกนี้รอบเดียว
-        masked_key: newKeyRecord.masked_key,
-        created_at: newKeyRecord.created_at
-      }
-    }, { status: 201 });
-
+    return createdResponse(
+      {
+        id: createdKey?.id,
+        name,
+        raw_key: rawKey,
+        masked_key: masked_key,
+        created_at: createdKey?.createdAt?.toISOString?.() ?? new Date().toISOString(),
+      },
+      "สร้าง API Key สำเร็จ! กรุณาคัดลอกและบันทึกคีย์นี้ทันที เพราะระบบจะแสดงคีย์นีเพียงครั้งเดียวเท่านั้น",
+    );
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return errorResponse(e.message);
   }
 }

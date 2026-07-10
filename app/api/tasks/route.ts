@@ -1,6 +1,20 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getDb, saveDb, Task, isTimeConflicting, validateAndProcessTags, triggerSystemEvents } from '@/lib/db';
-import { getSessionUser, authenticateApiKey } from '@/lib/auth';
+import { NextRequest, NextResponse } from "next/server";
+import { and, desc, eq, ilike, or } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { getDb } from "@/lib/db/client";
+import { getSessionUser, authenticateApiKey } from "@/lib/auth";
+import { task } from "@/lib/db/schema";
+import { toTask } from "@/lib/db/orm";
+import {
+  errorResponse,
+  successResponse,
+  createdResponse,
+  getOrAuthenticateUser,
+  sortTasks,
+  paginateTasks,
+  validateInput,
+} from "@/lib/api-helpers";
+import { createTaskSchema } from "@/lib/validation";
 
 /**
  * JSDoc: บริหารจัดการงาน (GET/POST /api/tasks)
@@ -9,88 +23,77 @@ import { getSessionUser, authenticateApiKey } from '@/lib/auth';
  */
 export async function GET(req: NextRequest) {
   try {
-    let user = await getSessionUser();
-    if (!user) {
-      const authHeader = req.headers.get('Authorization');
-      user = authenticateApiKey(authHeader);
-    }
+    const user = await getOrAuthenticateUser(
+      req,
+      getSessionUser,
+      authenticateApiKey,
+    );
 
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return errorResponse("Unauthorized", 401);
     }
 
     const { searchParams } = new URL(req.url);
-    const projectId = searchParams.get('project_id');
-    const status = searchParams.get('status');
-    const tag = searchParams.get('tag');
-    const priority = searchParams.get('priority');
-    const type = searchParams.get('type');
-    const q = searchParams.get('q'); // Fuzzy search
-    const sort = searchParams.get('sort') || '-created_at';
-    const limit = parseInt(searchParams.get('limit') || '100', 10);
-    const page = parseInt(searchParams.get('page') || '1', 10);
+    const projectId = searchParams.get("project_id");
+    const status = searchParams.get("status");
+    const tag = searchParams.get("tag");
+    const priority = searchParams.get("priority");
+    const type = searchParams.get("type");
+    const q = searchParams.get("q");
+    const sort = searchParams.get("sort") || "-created_at";
+    const limit = parseInt(searchParams.get("limit") || "100", 10);
+    const page = parseInt(searchParams.get("page") || "1", 10);
 
     const db = getDb();
-    let tasks = db.tasks.filter((t) => t.user_id === user.id);
+    const whereClauses = [eq(task.userId, user.id)];
 
-    // Filter
-    if (projectId) tasks = tasks.filter((t) => t.project_id === projectId);
-    if (status) tasks = tasks.filter((t) => t.status === status);
-    if (tag) tasks = tasks.filter((t) => t.tags.includes(tag));
-    if (priority) tasks = tasks.filter((t) => t.priority === priority);
-    if (type) tasks = tasks.filter((t) => t.type === type);
+    if (projectId) whereClauses.push(eq(task.projectId, projectId));
+    if (status) whereClauses.push(eq(task.status, status));
+    if (priority) whereClauses.push(eq(task.priority, priority));
+    if (type) whereClauses.push(eq(task.type, type));
     if (q) {
-      const lowerQ = q.toLowerCase();
-      tasks = tasks.filter((t) => t.title.toLowerCase().includes(lowerQ) || t.description.toLowerCase().includes(lowerQ));
+      whereClauses.push(
+        or(ilike(task.title, `%${q}%`), ilike(task.description, `%${q}%`)),
+      );
     }
 
-    // Sort
-    tasks.sort((a, b) => {
-      let comparison = 0;
-      if (sort.includes('due_date')) {
-        const dateA = a.due_date || '9999-12-31';
-        const dateB = b.due_date || '9999-12-31';
-        comparison = dateA.localeCompare(dateB);
-      } else if (sort.includes('priority')) {
-        const pMap = { high: 3, medium: 2, low: 1 };
-        comparison = pMap[b.priority] - pMap[a.priority];
-      } else {
-        // default by created_at
-        comparison = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      }
-      return sort.startsWith('-') ? -comparison : comparison;
-    });
+    const rows = await db
+      .select()
+      .from(task)
+      .where(and(...whereClauses))
+      .orderBy(desc(task.createdAt));
+    let tasks = rows.map(toTask);
 
-    // Pagination
-    const total = tasks.length;
-    const offset = (page - 1) * limit;
-    const paginated = tasks.slice(offset, offset + limit);
+    if (tag) {
+      tasks = tasks.filter((item) => item.tags.includes(tag));
+    }
 
-    return NextResponse.json({
-      data: paginated,
-      meta: {
-        total,
-        page,
-        limit,
-        pages: Math.ceil(total / limit)
-      }
-    });
+    tasks = sortTasks(tasks, sort);
+    const { data: paginated, meta } = paginateTasks(tasks, page, limit);
 
+    return NextResponse.json({ data: paginated, meta });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || 'Internal Server Error' }, { status: 500 });
+    return errorResponse(e.message || "Internal Server Error");
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    let user = await getSessionUser();
-    if (!user) {
-      const authHeader = req.headers.get('Authorization');
-      user = authenticateApiKey(authHeader);
-    }
+    const user = await getOrAuthenticateUser(
+      req,
+      getSessionUser,
+      authenticateApiKey,
+    );
 
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return errorResponse("Unauthorized", 401);
+    }
+
+    const body = await req.json();
+    const validation = validateInput(createTaskSchema, body);
+
+    if (validation.error) {
+      return errorResponse(validation.error, 400);
     }
 
     const {
@@ -106,68 +109,45 @@ export async function POST(req: NextRequest) {
       estimated_time,
       actual_time,
       parent_id,
-      tags
-    } = await req.json();
-
-    if (!title || !project_id) {
-      return NextResponse.json({ error: 'กรุณากรอกชื่อหัวข้องานและระบุโปรเจกต์' }, { status: 400 });
-    }
+      tags,
+    } = validation.data!;
 
     const db = getDb();
-    
-    // 1. Appointment Conflict Checkingสำหรับงานแต่งตั้งเวลา (Event, Habit)
-    const normalizedType = type || 'task';
-    const normalizedDueDate = due_date || new Date().toISOString().split('T')[0];
+    const normalizedDueDate =
+      due_date || new Date().toISOString().split("T")[0];
 
-    if ((normalizedType === 'event' || normalizedType === 'habit') && start_time && end_time) {
-      const isConflict = isTimeConflicting(user.id, normalizedDueDate, start_time, end_time);
-      if (isConflict) {
-        return NextResponse.json({
-          error: 'ช่วงเวลานี้ถูกจองไปแล้ว กรุณาเลือกวันที่อื่น (Appointment Conflict)'
-        }, { status: 409 });
-      }
-    }
+    const [taskCount] = await db
+      .select({ count: task.id })
+      .from(task)
+      .where(eq(task.userId, user.id));
+    const codeId = `BL1NK-${1001 + (taskCount ? 1 : 0)}`;
 
-    // 2. Tag Rules Engine Validation
-    const inTags = tags || [];
-    const tagValidation = validateAndProcessTags(user.id, inTags);
-    if (tagValidation.error) {
-      return NextResponse.json({ error: tagValidation.error }, { status: 422 });
-    }
+    const [createdTask] = await db
+      .insert(task)
+      .values({
+        id: codeId,
+        title,
+        projectId: project_id,
+        userId: user.id,
+        description: description || "",
+        status: status || "todo",
+        dueDate: normalizedDueDate,
+        startTime: start_time || undefined,
+        endTime: end_time || undefined,
+        priority: priority || "medium",
+        type: normalizedType,
+        estimatedTime,
+        actualTime,
+        parentId: parent_id || undefined,
+        tags: tags || [],
+      })
+      .returning();
 
-    // สร้างไอดีอ้างอิงรหัส BL1NK-XXXX อัตโนมัติ
-    const taskCount = db.tasks.length;
-    const codeId = `BL1NK-${1001 + taskCount}`;
-
-    const newTask: Task = {
-      id: codeId,
-      title,
-      project_id,
-      user_id: user.id,
-      description: description || '',
-      status: status || 'todo',
-      due_date: normalizedDueDate,
-      start_time: start_time || undefined,
-      end_time: end_time || undefined,
-      priority: priority || 'medium',
-      type: normalizedType,
-      estimated_time,
-      actual_time,
-      parent_id: parent_id || undefined,
-      tags: tagValidation.processedTags,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-
-    db.tasks.push(newTask);
-    saveDb(db);
-
-    // 3. ทริกเกอร์ Automations และ Webhooks สั่นสะเทือนเวิร์กสเปซ
-    triggerSystemEvents(user.id, 'task.created', newTask);
-
-    return NextResponse.json({ message: 'สร้างงานสำเร็จ', data: newTask }, { status: 201 });
-
+    return createdResponse(
+      createdTask ? toTask(createdTask) : null,
+      "สร้างงานสำเร็จ",
+    );
   } catch (e: any) {
-    return NextResponse.json({ error: e.message || 'Internal Server Error' }, { status: 500 });
+    return errorResponse(e.message || "Internal Server Error");
   }
 }

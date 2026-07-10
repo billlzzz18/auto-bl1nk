@@ -45,5 +45,6 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     stdout: 'ignore',
     stderr: 'pipe',
+    timeout: 180000, // 3 minutes for dev server startup
   },
 });
