@@ -1,0 +1,41 @@
+{
+  "users": [
+    {
+      "id": "alex_morgan",
+      "email": "alex@bl1nk.io",
+      "passwordHash": "0591481229cc667660a2e7da634eb9fb907d9802c3f251b288a2346bc194ee89",
+      "name": "Alex Morgan",
+      "bio": "Creative Director at bl1nk technologies.",
+      "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150",
+      "google_connected": true,
+      "created_at": "2026-07-10T11:25:08.306Z",
+      "updated_at": "2026-07-10T11:25:08.306Z"
+    }
+  ],
+  "sessions": [],
+  "accounts": [
+    {
+      "id": "acct_alex",
+      "user_id": "alex_morgan",
+      "provider_id": "credential",
+      "account_id": "alex_morgan",
+      "password": "0591481229cc667660a2e7da634eb9fb907d9802c3f251b288a2346bc194ee89",
+      "created_at": "2026-07-10T11:25:08.306Z",
+      "updated_at": "2026-07-10T11:25:08.306Z"
+    }
+  ],
+  "verifications": [],
+  "chats": [],
+  "chatEvents": [],
+  "projects": [],
+  "tasks": [],
+  "folders": [],
+  "tags": [],
+  "tagRules": [],
+  "automations": [],
+  "webhooks": [],
+  "apiKeys": [],
+  "trash": [],
+  "extensions": [],
+  "activityLogs": []
+}

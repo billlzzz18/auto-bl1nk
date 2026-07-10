@@ -1,6 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getDb, saveDb, Tag, TagRule } from '@/lib/db';
-import { getSessionUser } from '@/lib/auth';
+import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
+import { and, desc, eq, ilike } from "drizzle-orm";
+import { getDb } from "@/lib/db/client";
+import { getSessionUser } from "@/lib/auth";
+import { tag, tagRule } from "@/lib/db/schema";
+import { toTag, toTagRule } from "@/lib/db/orm";
+import { errorResponse, successResponse, createdResponse, getUserItems, deleteUserItem } from "@/lib/api-helpers";
 
 /**
  * JSDoc: ตรวจสอบและบันทึกแท็กพ่วงกฎกำหนดขอบเขต (GET/POST /api/tags)
@@ -10,16 +15,16 @@ export async function GET(req: NextRequest) {
   try {
     const user = await getSessionUser();
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return errorResponse("Unauthorized", 401);
     }
 
     const db = getDb();
-    const userTags = db.tags.filter((t) => t.user_id === user.id);
-    const userRules = db.tagRules.filter((r) => r.user_id === user.id);
+    const userTags = await getUserItems(db, tag, user.id, toTag);
+    const userRules = await getUserItems(db, tagRule, user.id, toTagRule);
 
-    return NextResponse.json({ data: { tags: userTags, tagRules: userRules } });
+    return successResponse({ tags: userTags, tagRules: userRules });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return errorResponse(e.message);
   }
 }
 
@@ -27,71 +32,91 @@ export async function POST(req: NextRequest) {
   try {
     const user = await getSessionUser();
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return errorResponse("Unauthorized", 401);
     }
 
-    const { action, name, color, rule_type, rule_value, rule_id } = await req.json();
+    const { action, name, color, rule_type, rule_value, rule_id } =
+      await req.json();
 
     const db = getDb();
 
-    // 1. บันทึก/ลบ ป้ายแท็กสี (Tag CRUD)
-    if (action === 'create_tag') {
-      if (!name) return NextResponse.json({ error: 'กรุณากรอกชื่อแท็ก' }, { status: 400 });
-      
-      const exists = db.tags.some((t) => t.user_id === user.id && t.name.toLowerCase() === name.toLowerCase());
-      if (exists) return NextResponse.json({ error: 'มีแท็กชื่อนี้อยู่แล้ว' }, { status: 400 });
+    if (action === "create_tag") {
+      if (!name) {
+        return errorResponse("กรุณากรอกชื่อแท็ก", 400);
+      }
 
-      const newTag: Tag = {
-        id: 'tag_' + Math.random().toString(36).substr(2, 9),
-        name,
-        color: color || '#FFD700',
-        user_id: user.id
-      };
-      db.tags.push(newTag);
-      saveDb(db);
-      return NextResponse.json({ message: 'สร้างแท็กเรียบร้อย', data: newTag }, { status: 201 });
+      const [exists] = await db
+        .select()
+        .from(tag)
+        .where(and(eq(tag.userId, user.id), ilike(tag.name, name)))
+        .limit(1);
+      if (exists) {
+        return errorResponse("มีแท็กชื่อนี้อยู่แล้ว", 400);
+      }
+
+      const newTagId = `tag_${randomUUID()}`;
+      const [createdTag] = await db
+        .insert(tag)
+        .values({
+          id: newTagId,
+          name,
+          color: color || "#FFD700",
+          userId: user.id,
+        })
+        .returning();
+
+      return createdResponse(
+        createdTag ? toTag(createdTag) : null,
+        "สร้างแท็กเรียบร้อย",
+      );
     }
 
-    if (action === 'delete_tag') {
-      db.tags = db.tags.filter((t) => !(t.user_id === user.id && t.name === name));
-      saveDb(db);
-      return NextResponse.json({ message: 'ลบแท็กเรียบร้อย' });
+    if (action === "delete_tag") {
+      await db.delete(tag).where(eq(tag.userId, user.id));
+      return successResponse(null, "ลบแท็กเรียบร้อย");
     }
 
-    // 2. บันทึกและปรับแต่งค่าระบบกฎ Tag Rules Engine
-    if (action === 'save_rule') {
+    if (action === "save_rule") {
       if (!rule_type || rule_value === undefined) {
-        return NextResponse.json({ error: 'กรุณากรอกข้อมูลกฎและเงื่อนไข' }, { status: 400 });
+        return errorResponse("กรุณากรอกข้อมูลกฎและเงื่อนไข", 400);
       }
 
-      // อัปเดตกฎหรือเพิ่มเข้าไปใหม่
-      const existingRuleIndex = db.tagRules.findIndex((r) => r.user_id === user.id && r.type === rule_type);
-      
-      if (existingRuleIndex !== -1) {
-        db.tagRules[existingRuleIndex].rule_value = rule_value;
+      const [existingRule] = await db
+        .select()
+        .from(tagRule)
+        .where(and(eq(tagRule.userId, user.id), eq(tagRule.type, rule_type)))
+        .limit(1);
+
+      if (existingRule) {
+        await db
+          .update(tagRule)
+          .set({ ruleValue: rule_value })
+          .where(eq(tagRule.id, existingRule.id));
       } else {
-        const newRule: TagRule = {
-          id: 'tr_' + Math.random().toString(36).substr(2, 9),
-          type: rule_type,
-          rule_value,
-          user_id: user.id
-        };
-        db.tagRules.push(newRule);
+        await db
+          .insert(tagRule)
+          .values({
+            id: `tr_${randomUUID()}`,
+            type: rule_type,
+            ruleValue: rule_value,
+            userId: user.id,
+          });
       }
 
-      saveDb(db);
-      return NextResponse.json({ message: 'ปรับปรุงกฎข้อจำกัดแท็กสำเร็จ', data: db.tagRules.filter((r) => r.user_id === user.id) });
+      const userRules = await getUserItems(db, tagRule, user.id, toTagRule);
+      return successResponse(userRules, "ปรับปรุงกฎข้อจำกัดแท็กสำเร็จ");
     }
 
-    if (action === 'delete_rule') {
-      db.tagRules = db.tagRules.filter((r) => !(r.id === rule_id && r.user_id === user.id));
-      saveDb(db);
-      return NextResponse.json({ message: 'ยกเลิกกฎข้อจำกัดแท็กเรียบร้อย', data: db.tagRules.filter((r) => r.user_id === user.id) });
+    if (action === "delete_rule") {
+      await db
+        .delete(tagRule)
+        .where(and(eq(tagRule.id, rule_id), eq(tagRule.userId, user.id)));
+      const userRules = await getUserItems(db, tagRule, user.id, toTagRule);
+      return successResponse(userRules, "ยกเลิกกฎข้อจำกัดแท็กเรียบร้อย");
     }
 
-    return NextResponse.json({ error: 'Action not supported' }, { status: 400 });
-
+    return errorResponse("Action not supported", 400);
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return errorResponse(e.message);
   }
 }

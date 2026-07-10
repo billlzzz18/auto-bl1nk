@@ -1,25 +1,28 @@
 import { cookies, headers } from 'next/headers';
 import crypto from 'crypto';
-import { getDb, User } from './db';
-
-/**
- * JSDoc: ระบบการจัดการ Session และความปลอดภัย (Security Session Helper)
- * รองรับการทำ Cookie-based authentication บน Next.js Server Components และ API Routes
- */
+import { eq } from 'drizzle-orm';
+import { getDb as getDrizzleDb } from '@/lib/db/client';
+import { getDb as getMemoryDb, findUserByEmail, findUserById } from '@/lib/db';
+import { user, apiKey } from '@/lib/db/schema';
+import type { User } from '@/lib/db/schema';
 
 const SESSION_COOKIE_NAME = 'bl1nk_session';
 
-/**
- * แปลงรหัสผ่านแบบ SHA-256 เพื่อเก็บรักษาความปลอดภัยของรหัสผ่าน
- * @param password - รหัสผ่านดั้งเดิม
- */
 export function hashPassword(password: string): string {
   return crypto.createHash('sha256').update(password).digest('hex');
 }
 
-/**
- * ตรวจสอบความถูกต้องและดึงข้อมูลของ User ในฝั่ง Server Component หรือ API Route
- */
+function isDatabaseConfigured(): boolean {
+  return Boolean(process.env.DATABASE_URL?.trim());
+}
+
+async function getDbForAuth() {
+  if (isDatabaseConfigured()) {
+    return { db: getDrizzleDb(), mode: 'drizzle' as const };
+  }
+  return { db: getMemoryDb(), mode: 'memory' as const };
+}
+
 export async function getSessionUser(): Promise<User | null> {
   try {
     const cookieStore = await cookies();
@@ -40,55 +43,86 @@ export async function getSessionUser(): Promise<User | null> {
     if (!userId) {
       return null;
     }
-    const db = getDb();
-    const user = db.users.find((u) => u.id === userId);
 
-    return user || null;
+    const { db, mode } = await getDbForAuth();
+
+    if (mode === 'drizzle') {
+      const [existingUser] = await db.select().from(user).where(eq(user.id, userId)).limit(1);
+      return existingUser || null;
+    }
+
+    const memoryUser = findUserById(userId);
+    if (!memoryUser) {
+      return null;
+    }
+
+    return {
+      id: memoryUser.id,
+      email: memoryUser.email,
+      name: memoryUser.name,
+      image: memoryUser.avatar,
+      emailVerified: false,
+      createdAt: new Date(memoryUser.created_at),
+      updatedAt: memoryUser.updated_at ? new Date(memoryUser.updated_at) : new Date(memoryUser.created_at),
+    } as User;
   } catch (e) {
     return null;
   }
 }
 
-/**
- * ตั้งค่า Session Cookie เมื่อผู้ใช้ Login สำเร็จ
- * @param userId - ไอดีของผู้ใช้
- */
 export async function setSessionUser(userId: string): Promise<void> {
   const cookieStore = await cookies();
   cookieStore.set({
     name: SESSION_COOKIE_NAME,
     value: userId,
     httpOnly: true,
-    secure: true, // บังคับ true เพื่อใช้งาน SameSite=None ใน cross-origin iframe ของ AI Studio
-    sameSite: 'none', // จำเป็นเพื่อให้จำเซสชั่นล็อกอินได้ในหน้าต่างพรีวิว
-    maxAge: 60 * 60 * 24 * 7, // 7 วัน
+    secure: true,
+    sameSite: 'none',
+    maxAge: 60 * 60 * 24 * 7,
     path: '/',
   });
 }
 
-/**
- * ล้าง Session Cookie เมื่อผู้ใช้ทำการ Logout
- */
 export async function clearSessionUser(): Promise<void> {
   const cookieStore = await cookies();
   cookieStore.delete(SESSION_COOKIE_NAME);
 }
 
-/**
- * ตรวจสอบ API Key สำหรับนักพัฒนาและบุคคลอื่นที่เข้ามาใช้ REST API
- */
-export function authenticateApiKey(authHeader: string | null): User | null {
+export async function authenticateApiKey(authHeader: string | null): Promise<User | null> {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return null;
   }
-  const key = authHeader.substring(7); // ดึงค่าหลัง Bearer
-  const db = getDb();
-  const apiKeyRecord = db.apiKeys.find((k) => k.key === key);
-  
+  const key = authHeader.substring(7);
+  const { db, mode } = await getDbForAuth();
+
+  if (mode === 'drizzle') {
+    const [apiKeyRecord] = await db.select().from(apiKey).where(eq(apiKey.key, key)).limit(1);
+    if (!apiKeyRecord) {
+      return null;
+    }
+
+    const [userRecord] = await db.select().from(user).where(eq(user.id, apiKeyRecord.userId)).limit(1);
+    return userRecord || null;
+  }
+
+  const memoryDb = db as ReturnType<typeof getMemoryDb>;
+  const apiKeyRecord = memoryDb.apiKeys.find((k) => k.key === key);
   if (!apiKeyRecord) {
     return null;
   }
 
-  const user = db.users.find((u) => u.id === apiKeyRecord.user_id);
-  return user || null;
+  const memoryUser = memoryDb.users.find((u) => u.id === apiKeyRecord.user_id);
+  if (!memoryUser) {
+    return null;
+  }
+
+  return {
+    id: memoryUser.id,
+    email: memoryUser.email,
+    name: memoryUser.name,
+    image: memoryUser.avatar,
+    emailVerified: false,
+    createdAt: new Date(memoryUser.created_at),
+    updatedAt: memoryUser.updated_at ? new Date(memoryUser.updated_at) : new Date(memoryUser.created_at),
+  } as User;
 }

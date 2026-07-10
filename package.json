@@ -3,8 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "build": "next build",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:migrate:production": "vercel env run -e production -- pnpm db:migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "typecheck": "next typegen && tsgo --noEmit -p tsconfig.json",
+    "build:eve": "eve build",
+    "dev:eve": "eve dev",
+    "start:eve": "eve start",
     "start": "next start",
     "lint": "eslint .",
     "clean": "next clean"
